@@ -1,0 +1,12 @@
+{
+  "app.title": "Rana Remote",
+  "app.subtitle": "Web 优先备份控制台",
+  "auth.login": "登录",
+  "auth.username": "用户名",
+  "auth.password": "密码",
+  "execution.create": "执行备份",
+  "execution.cancel": "取消",
+  "menu.servers": "服务器",
+  "menu.executions": "执行记录",
+  "menu.settings": "设置"
+}

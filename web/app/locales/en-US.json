@@ -1,0 +1,12 @@
+{
+  "app.title": "Rana Remote",
+  "app.subtitle": "Web-first backup control plane",
+  "auth.login": "Login",
+  "auth.username": "Username",
+  "auth.password": "Password",
+  "execution.create": "Run Backup",
+  "execution.cancel": "Cancel",
+  "menu.servers": "Servers",
+  "menu.executions": "Executions",
+  "menu.settings": "Settings"
+}

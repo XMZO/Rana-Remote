@@ -1,0 +1,12 @@
+{
+  "name": "rana-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "lint": "echo 'no-op lint'",
+    "test": "echo 'no-op test'",
+    "test:e2e": "echo 'no-op e2e'",
+    "i18n:check": "node scripts/check-i18n.mjs"
+  }
+}

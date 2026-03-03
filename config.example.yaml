@@ -1,0 +1,76 @@
+global:
+  timeout: "30m"
+  concurrency: 3
+  temp_dir: "/tmp/rana-backup"
+  ssh:
+    strict_host_key: true
+    known_hosts_path: "~/.ssh/known_hosts"
+
+web:
+  enabled: true
+  listen: ":8080"
+  base_path: "/"
+  session_ttl: "24h"
+  access_token_ttl: "15m"
+  refresh_token_ttl: "168h"
+  csrf_enabled: true
+  cors_allow_origins:
+    - "http://localhost:8080"
+
+database:
+  driver: "sqlite"
+  dsn: "./data/rana.db"
+
+auth:
+  bootstrap_admin:
+    username: "${RANA_ADMIN_USER}"
+    password: "${RANA_ADMIN_PASS}"
+  password_policy:
+    min_length: 12
+    require_number: true
+    require_special: true
+  login_rate_limit: "5/m"
+
+i18n:
+  default_locale: "zh-CN"
+  supported_locales:
+    - "zh-CN"
+    - "en-US"
+  fallback_locale: "en-US"
+  locale_source_order:
+    - "query"
+    - "cookie"
+    - "header"
+
+modules:
+  backup: true
+  schedule: true
+  audit: true
+  notify: true
+  users: true
+
+servers:
+  - name: "vps-tokyo"
+    host: "203.0.113.1"
+    port: 22
+    user: "root"
+    key_path: "${SSH_KEY_PATH}"
+    paths:
+      - "/opt/app/data"
+      - "/etc/nginx"
+    rclone:
+      remote: "onedrive:backups/vps-tokyo"
+
+  - name: "vps-sg"
+    host: "198.51.100.2"
+    port: 2222
+    user: "ubuntu"
+    key_path: "~/.ssh/id_rsa"
+    passphrase: "${SSH_PASSPHRASE}"
+    paths:
+      - "/home/ubuntu/app"
+    rclone:
+      remote: "s3:my-bucket/backups/vps-sg"
+      flags:
+        - "--s3-chunk-size"
+        - "64M"

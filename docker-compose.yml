@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  rana-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rana-remote:latest
+    container_name: rana-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      RANA_ADMIN_USER: admin
+      RANA_ADMIN_PASS: change_me
+      RANA_JWT_SECRET: change_me_please
+      SSH_KEY_PATH: /root/.ssh/id_rsa
+    volumes:
+      - ./config.example.yaml:/opt/rana/config.yaml:ro
+      - ./data:/data
+      - ${HOME}/.ssh:/root/.ssh:ro
+    command: ["-c", "/opt/rana/config.yaml", "-migrate"]
