@@ -5,8 +5,11 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "lint": "echo 'no-op lint'",
-    "test": "echo 'no-op test'",
-    "test:e2e": "echo 'no-op e2e'",
+    "test": "node --test test/*.test.mjs",
+    "test:e2e": "playwright test",
     "i18n:check": "node scripts/check-i18n.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
   }
 }

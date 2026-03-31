@@ -1,0 +1,6 @@
+services:
+  rana-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rana-remote:local

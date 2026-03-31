@@ -15,6 +15,7 @@ type ExecutionStatus string
 const (
 	StatusPending  ExecutionStatus = "pending"
 	StatusRunning  ExecutionStatus = "running"
+	StatusRetrying ExecutionStatus = "retrying"
 	StatusSuccess  ExecutionStatus = "success"
 	StatusFailed   ExecutionStatus = "failed"
 	StatusCanceled ExecutionStatus = "canceled"
@@ -37,6 +38,7 @@ type Server struct {
 	Port         int       `json:"port"`
 	User         string    `json:"user"`
 	KeyPath      string    `json:"key_path"`
+	Passphrase   string    `json:"passphrase,omitempty"`
 	Tags         []string  `json:"tags,omitempty"`
 	Enabled      bool      `json:"enabled"`
 	Paths        []string  `json:"paths"`
@@ -45,8 +47,38 @@ type Server struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+type Policy struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	ServerNames  []string  `json:"server_names"`
+	Paths        []string  `json:"paths"`
+	RcloneRemote string    `json:"rclone_remote"`
+	RcloneFlags  []string  `json:"rclone_flags,omitempty"`
+	TimeoutSec   int       `json:"timeout_sec"`
+	RetryLimit   int       `json:"retry_limit"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type Schedule struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	PolicyID      string    `json:"policy_id,omitempty"`
+	ServerNames   []string  `json:"server_names"`
+	CronExpr      string    `json:"cron_expr"`
+	Timezone      string    `json:"timezone"`
+	Enabled       bool      `json:"enabled"`
+	MisfirePolicy string    `json:"misfire_policy"`
+	LastRunAt     time.Time `json:"last_run_at,omitempty"`
+	NextRunAt     time.Time `json:"next_run_at,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 type Execution struct {
 	ID          string          `json:"id"`
+	PolicyID    string          `json:"policy_id,omitempty"`
 	Status      ExecutionStatus `json:"status"`
 	TriggerType string          `json:"trigger_type"`
 	ServerNames []string        `json:"server_names"`
@@ -71,6 +103,12 @@ type ExecutionLog struct {
 	Line        string    `json:"line"`
 }
 
+type RetentionReport struct {
+	Executions    int `json:"executions"`
+	ExecutionLogs int `json:"execution_logs"`
+	AuditLogs     int `json:"audit_logs"`
+}
+
 type AuditLog struct {
 	ID           string    `json:"id"`
 	ActorID      string    `json:"actor_id"`
@@ -79,5 +117,6 @@ type AuditLog struct {
 	ResourceID   string    `json:"resource_id"`
 	Diff         string    `json:"diff,omitempty"`
 	IP           string    `json:"ip,omitempty"`
+	TraceID      string    `json:"trace_id,omitempty"`
 	Timestamp    time.Time `json:"timestamp"`
 }

@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: go test ./... -count=1
+      - run: cd web && npm ci
+      - run: cd web && npx playwright install --with-deps chromium
+      - run: cd web && npm test
+      - run: cd web && npm run test:e2e

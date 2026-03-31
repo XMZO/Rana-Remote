@@ -3,28 +3,36 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
+var persistMu sync.Mutex
+
 const (
-	defaultTimeout         = "30m"
-	defaultTempDir         = "/tmp/rana-backup"
-	defaultKnownHostsPath  = "~/.ssh/known_hosts"
-	defaultWebListen       = ":8080"
-	defaultWebBasePath     = "/"
-	defaultSessionTTL      = "24h"
-	defaultAccessTokenTTL  = "15m"
-	defaultRefreshTokenTTL = "168h"
-	defaultDBDriver        = "sqlite"
-	defaultDBDSN           = "./data/rana.db"
-	defaultLoginRateLimit  = "5/m"
-	defaultLocale          = "zh-CN"
-	defaultFallbackLocale  = "en-US"
+	defaultTimeout            = "30m"
+	defaultTempDir            = "/tmp/rana-backup"
+	defaultKnownHostsPath     = "~/.ssh/known_hosts"
+	defaultWebListen          = ":8080"
+	defaultWebBasePath        = "/"
+	defaultSessionTTL         = "24h"
+	defaultAccessTokenTTL     = "15m"
+	defaultRefreshTokenTTL    = "168h"
+	defaultDBDriver           = "sqlite"
+	defaultDBDSN              = "./data/rana.db"
+	defaultLoginRateLimit     = "5/m"
+	defaultLocale             = "zh-CN"
+	defaultFallbackLocale     = "en-US"
+	defaultExecutionRetention = "720h"
+	defaultExecutionLogRetain = "720h"
+	defaultAuditLogRetention  = "2160h"
 )
 
 // Config is the application config root.
@@ -34,20 +42,28 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 	Auth     AuthConfig     `yaml:"auth"`
 	I18N     I18NConfig     `yaml:"i18n"`
+	Notify   NotifyConfig   `yaml:"notify"`
 	Modules  ModuleConfig   `yaml:"modules"`
 	Servers  []Server       `yaml:"servers"`
 }
 
 type GlobalConfig struct {
-	Timeout     string    `yaml:"timeout"`
-	Concurrency int       `yaml:"concurrency"`
-	TempDir     string    `yaml:"temp_dir"`
-	SSH         SSHConfig `yaml:"ssh"`
+	Timeout     string          `yaml:"timeout"`
+	Concurrency int             `yaml:"concurrency"`
+	TempDir     string          `yaml:"temp_dir"`
+	SSH         SSHConfig       `yaml:"ssh"`
+	Retention   RetentionConfig `yaml:"retention"`
 }
 
 type SSHConfig struct {
 	StrictHostKey  bool   `yaml:"strict_host_key"`
 	KnownHostsPath string `yaml:"known_hosts_path"`
+}
+
+type RetentionConfig struct {
+	Executions    string `yaml:"executions"`
+	ExecutionLogs string `yaml:"execution_logs"`
+	AuditLogs     string `yaml:"audit_logs"`
 }
 
 type WebConfig struct {
@@ -59,6 +75,7 @@ type WebConfig struct {
 	RefreshTokenTTL  string   `yaml:"refresh_token_ttl"`
 	CSRFEnabled      bool     `yaml:"csrf_enabled"`
 	CORSAllowOrigins []string `yaml:"cors_allow_origins"`
+	IPAllowList      []string `yaml:"ip_allow_list"`
 }
 
 type DatabaseConfig struct {
@@ -88,6 +105,25 @@ type I18NConfig struct {
 	SupportedLocales  []string `yaml:"supported_locales"`
 	FallbackLocale    string   `yaml:"fallback_locale"`
 	LocaleSourceOrder []string `yaml:"locale_source_order"`
+}
+
+type NotifyConfig struct {
+	WebhookURL        string            `yaml:"webhook_url"`
+	Email             EmailNotifyConfig `yaml:"email"`
+	OnSuccess         bool              `yaml:"on_success"`
+	OnFailure         bool              `yaml:"on_failure"`
+	SuppressionWindow string            `yaml:"suppression_window"`
+}
+
+type EmailNotifyConfig struct {
+	Enabled  bool     `yaml:"enabled"`
+	SMTPHost string   `yaml:"smtp_host"`
+	SMTPPort int      `yaml:"smtp_port"`
+	Username string   `yaml:"username"`
+	Password string   `yaml:"password"`
+	From     string   `yaml:"from"`
+	To       []string `yaml:"to"`
+	UseTLS   bool     `yaml:"use_tls"`
 }
 
 type ModuleConfig struct {
@@ -134,12 +170,62 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+func Persist(path string, cfg *Config) error {
+	if cfg == nil {
+		return errors.New("config is nil")
+	}
+	next := *cfg
+	next.applyDefaults()
+	next.expandPaths()
+	if err := next.Validate(); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(&next)
+	if err != nil {
+		return fmt.Errorf("marshal yaml: %w", err)
+	}
+	persistMu.Lock()
+	defer persistMu.Unlock()
+	dir := filepath.Dir(path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create config dir: %w", err)
+		}
+	}
+	tmp, err := os.CreateTemp(dir, "rana-config-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace config: %w", err)
+	}
+	return nil
+}
+
 func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.Global.Timeout) == "" {
 		c.Global.Timeout = defaultTimeout
 	}
 	if strings.TrimSpace(c.Global.TempDir) == "" {
 		c.Global.TempDir = defaultTempDir
+	}
+	if strings.TrimSpace(c.Global.Retention.Executions) == "" {
+		c.Global.Retention.Executions = defaultExecutionRetention
+	}
+	if strings.TrimSpace(c.Global.Retention.ExecutionLogs) == "" {
+		c.Global.Retention.ExecutionLogs = defaultExecutionLogRetain
+	}
+	if strings.TrimSpace(c.Global.Retention.AuditLogs) == "" {
+		c.Global.Retention.AuditLogs = defaultAuditLogRetention
 	}
 	if strings.TrimSpace(c.Global.SSH.KnownHostsPath) == "" {
 		c.Global.SSH.KnownHostsPath = defaultKnownHostsPath
@@ -190,6 +276,12 @@ func (c *Config) applyDefaults() {
 	if len(c.I18N.LocaleSourceOrder) == 0 {
 		c.I18N.LocaleSourceOrder = []string{"query", "cookie", "header"}
 	}
+	if strings.TrimSpace(c.Notify.SuppressionWindow) == "" {
+		c.Notify.SuppressionWindow = "0s"
+	}
+	if c.Notify.Email.SMTPPort == 0 {
+		c.Notify.Email.SMTPPort = 587
+	}
 
 	// backup is foundational and should default true.
 	if !c.Modules.Backup {
@@ -237,16 +329,19 @@ func (c *Config) Validate() error {
 	if c.Global.SSH.StrictHostKey && strings.TrimSpace(c.Global.SSH.KnownHostsPath) == "" {
 		return errors.New("global.ssh.known_hosts_path is required when strict_host_key=true")
 	}
+	if _, err := time.ParseDuration(c.Global.Retention.Executions); err != nil {
+		return fmt.Errorf("invalid global.retention.executions: %w", err)
+	}
+	if _, err := time.ParseDuration(c.Global.Retention.ExecutionLogs); err != nil {
+		return fmt.Errorf("invalid global.retention.execution_logs: %w", err)
+	}
+	if _, err := time.ParseDuration(c.Global.Retention.AuditLogs); err != nil {
+		return fmt.Errorf("invalid global.retention.audit_logs: %w", err)
+	}
 
 	if c.Web.Enabled {
 		if strings.TrimSpace(c.Web.Listen) == "" {
 			return errors.New("web.listen is required when web.enabled=true")
-		}
-		if strings.TrimSpace(c.Database.Driver) == "" || strings.TrimSpace(c.Database.DSN) == "" {
-			return errors.New("database.driver and database.dsn are required when web.enabled=true")
-		}
-		if strings.TrimSpace(c.Auth.BootstrapAdmin.Username) == "" || strings.TrimSpace(c.Auth.BootstrapAdmin.Password) == "" {
-			return errors.New("auth.bootstrap_admin.username/password are required when web.enabled=true")
 		}
 		if _, err := time.ParseDuration(c.Web.SessionTTL); err != nil {
 			return fmt.Errorf("invalid web.session_ttl: %w", err)
@@ -256,6 +351,18 @@ func (c *Config) Validate() error {
 		}
 		if _, err := time.ParseDuration(c.Web.RefreshTokenTTL); err != nil {
 			return fmt.Errorf("invalid web.refresh_token_ttl: %w", err)
+		}
+		for i, raw := range c.Web.IPAllowList {
+			entry := strings.TrimSpace(raw)
+			if entry == "" {
+				return fmt.Errorf("web.ip_allow_list[%d] must not be empty", i)
+			}
+			if _, _, err := net.ParseCIDR(entry); err == nil {
+				continue
+			}
+			if ip := net.ParseIP(entry); ip == nil {
+				return fmt.Errorf("web.ip_allow_list[%d] must be IP or CIDR", i)
+			}
 		}
 	}
 
@@ -287,6 +394,43 @@ func (c *Config) Validate() error {
 		case "query", "cookie", "header":
 		default:
 			return fmt.Errorf("invalid i18n.locale_source_order value: %s", src)
+		}
+	}
+
+	if strings.TrimSpace(c.Database.Driver) == "" || strings.TrimSpace(c.Database.DSN) == "" {
+		return errors.New("database.driver and database.dsn are required when web.enabled=true")
+	}
+	if strings.TrimSpace(c.Auth.BootstrapAdmin.Username) == "" || strings.TrimSpace(c.Auth.BootstrapAdmin.Password) == "" {
+		return errors.New("auth.bootstrap_admin.username/password are required when web.enabled=true")
+	}
+	if strings.TrimSpace(c.Notify.WebhookURL) != "" {
+		if _, err := url.ParseRequestURI(c.Notify.WebhookURL); err != nil {
+			return fmt.Errorf("notify.webhook_url is invalid: %w", err)
+		}
+	}
+	if _, err := time.ParseDuration(c.Notify.SuppressionWindow); err != nil {
+		return fmt.Errorf("notify.suppression_window is invalid: %w", err)
+	}
+	if c.Notify.Email.Enabled {
+		if strings.TrimSpace(c.Notify.Email.SMTPHost) == "" {
+			return errors.New("notify.email.smtp_host is required")
+		}
+		if c.Notify.Email.SMTPPort <= 0 || c.Notify.Email.SMTPPort > 65535 {
+			return errors.New("notify.email.smtp_port must be between 1 and 65535")
+		}
+		if strings.TrimSpace(c.Notify.Email.From) == "" {
+			return errors.New("notify.email.from is required")
+		}
+		if len(c.Notify.Email.To) == 0 {
+			return errors.New("notify.email.to must not be empty")
+		}
+		for i, addr := range append([]string{c.Notify.Email.From}, c.Notify.Email.To...) {
+			if !strings.Contains(addr, "@") {
+				if i == 0 {
+					return errors.New("notify.email.from must be a valid email")
+				}
+				return fmt.Errorf("notify.email.to[%d] must be a valid email", i-1)
+			}
 		}
 	}
 

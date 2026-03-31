@@ -1,11 +1,7 @@
-version: "3.9"
-
 services:
   rana-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: rana-remote:latest
+    image: ${RANA_IMAGE:-ghcr.io/xmzo/rana-remote:latest}
+    pull_policy: always
     container_name: rana-api
     restart: unless-stopped
     ports:
@@ -14,6 +10,7 @@ services:
       RANA_ADMIN_USER: admin
       RANA_ADMIN_PASS: change_me
       RANA_JWT_SECRET: change_me_please
+      RANA_DATA_KEY: change_me_data_key
       SSH_KEY_PATH: /root/.ssh/id_rsa
     volumes:
       - ./config.example.yaml:/opt/rana/config.yaml:ro

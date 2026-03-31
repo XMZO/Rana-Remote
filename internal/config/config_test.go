@@ -67,8 +67,59 @@ func TestValidate_I18NFallbackMustExist(t *testing.T) {
 			FallbackLocale:   "en-US",
 		},
 	}
-	err := cfg.Validate()
+	next := WithDefaults(*cfg)
+	err := next.Validate()
 	if err == nil || !strings.Contains(err.Error(), "fallback") {
 		t.Fatalf("expected fallback validation error, got %v", err)
+	}
+}
+
+func TestValidate_WebIPAllowList(t *testing.T) {
+	cfg := &Config{
+		Global:  GlobalConfig{Timeout: "1m", TempDir: "/tmp", SSH: SSHConfig{StrictHostKey: true, KnownHostsPath: "/tmp/known_hosts"}},
+		Modules: ModuleConfig{Backup: true},
+		Web: WebConfig{
+			Enabled:         true,
+			Listen:          ":8080",
+			SessionTTL:      "24h",
+			AccessTokenTTL:  "15m",
+			RefreshTokenTTL: "168h",
+			IPAllowList:     []string{"invalid-ip"},
+		},
+		Database: DatabaseConfig{Driver: "sqlite", DSN: ":memory:"},
+		Auth: AuthConfig{
+			BootstrapAdmin: BootstrapAdmin{
+				Username: "admin",
+				Password: "secret",
+			},
+		},
+		I18N: I18NConfig{
+			DefaultLocale:    "zh-CN",
+			SupportedLocales: []string{"zh-CN", "en-US"},
+			FallbackLocale:   "en-US",
+		},
+	}
+	next := WithDefaults(*cfg)
+	if err := next.Validate(); err == nil || !strings.Contains(err.Error(), "ip_allow_list") {
+		t.Fatalf("expected ip_allow_list validation error, got %v", err)
+	}
+}
+
+func TestValidate_RetentionDuration(t *testing.T) {
+	cfg := &Config{
+		Global: GlobalConfig{
+			Timeout:   "1m",
+			TempDir:   "/tmp",
+			SSH:       SSHConfig{StrictHostKey: true, KnownHostsPath: "/tmp/known_hosts"},
+			Retention: RetentionConfig{Executions: "bad-duration", ExecutionLogs: "24h", AuditLogs: "72h"},
+		},
+		Modules:  ModuleConfig{Backup: true},
+		Web:      WebConfig{Enabled: true, Listen: ":8080", SessionTTL: "24h", AccessTokenTTL: "15m", RefreshTokenTTL: "168h"},
+		Database: DatabaseConfig{Driver: "sqlite", DSN: ":memory:"},
+		Auth:     AuthConfig{BootstrapAdmin: BootstrapAdmin{Username: "admin", Password: "secret"}},
+		I18N:     I18NConfig{DefaultLocale: "zh-CN", SupportedLocales: []string{"zh-CN", "en-US"}, FallbackLocale: "en-US"},
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "global.retention.executions") {
+		t.Fatalf("expected retention validation error, got %v", err)
 	}
 }

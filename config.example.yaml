@@ -16,6 +16,9 @@ web:
   csrf_enabled: true
   cors_allow_origins:
     - "http://localhost:8080"
+  ip_allow_list:
+    - "127.0.0.1"
+    - "::1"
 
 database:
   driver: "sqlite"
@@ -48,6 +51,12 @@ modules:
   audit: true
   notify: true
   users: true
+
+notify:
+  webhook_url: ""
+  on_success: false
+  on_failure: true
+  suppression_window: "10m"
 
 servers:
   - name: "vps-tokyo"

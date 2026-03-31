@@ -75,7 +75,14 @@ func (s *Server) Router() http.Handler {
 		mux.Handle("POST /api/v1/schedules", protected(http.HandlerFunc(s.handleFeatureDisabled)))
 	}
 
-	return localeMiddleware(mux)
+	handler := localeMiddleware(mux)
+	handler = withTraceID(handler)
+	handler = withIPAllowList(s.cfg.Web.IPAllowList, handler)
+	handler = withCORS(s.cfg.Web.CORSAllowOrigins, handler)
+	handler = withCSRFGate(s.cfg.Web.CSRFEnabled, handler)
+	handler = withIdempotency(s, handler)
+	handler = withRequestTimeoutLog(30*time.Second, handler)
+	return handler
 }
 
 func authz(perm auth.Permission, next http.Handler) http.Handler {
@@ -91,8 +98,8 @@ func chain(middlewares ...func(http.Handler) http.Handler) func(http.Handler) ht
 	}
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "trace_id": traceIDFromRequest(r)})
 }
 
 func (s *Server) handleFeatureDisabled(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +135,21 @@ func (s *Server) translate(r *http.Request, key string, params map[string]any) s
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
+	if traceID := w.Header().Get(traceHeaderName); traceID != "" {
+		switch m := payload.(type) {
+		case map[string]any:
+			payload = withTraceIDPayload(m, traceID)
+		case map[string]string:
+			if _, exists := m["trace_id"]; !exists {
+				m2 := make(map[string]any, len(m)+1)
+				for k, v := range m {
+					m2[k] = v
+				}
+				m2["trace_id"] = traceID
+				payload = m2
+			}
+		}
+	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }

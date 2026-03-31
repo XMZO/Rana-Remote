@@ -26,12 +26,18 @@ func UserFromContext(ctx context.Context) (ContextUser, bool) {
 func Middleware(tokens *TokenManager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := ""
 			authz := strings.TrimSpace(r.Header.Get("Authorization"))
-			if !strings.HasPrefix(strings.ToLower(authz), "bearer ") {
-				writeAuthError(w, http.StatusUnauthorized, "unauthorized", "missing bearer token")
+			if strings.HasPrefix(strings.ToLower(authz), "bearer ") {
+				token = strings.TrimSpace(authz[len("Bearer "):])
+			}
+			if token == "" {
+				token = strings.TrimSpace(r.URL.Query().Get("access_token"))
+			}
+			if token == "" {
+				writeAuthError(w, http.StatusUnauthorized, "unauthorized", "missing access token")
 				return
 			}
-			token := strings.TrimSpace(authz[len("Bearer "):])
 			claims, err := tokens.Parse(token, "access")
 			if err != nil {
 				writeAuthError(w, http.StatusUnauthorized, "unauthorized", "invalid token")

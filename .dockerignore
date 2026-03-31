@@ -1,0 +1,11 @@
+.git
+.github
+.alma-snapshots
+node_modules
+web/node_modules
+web/dist
+data
+*.db
+*.log
+rana
+rana-api

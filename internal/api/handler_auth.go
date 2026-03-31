@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"net/http"
 	"time"
 
@@ -23,6 +25,12 @@ type setLocaleRequest struct {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	ip := remoteIP(r)
+	if s.loginLimiter != nil && !s.loginLimiter.Allow(ip) {
+		s.writeError(w, r, http.StatusTooManyRequests, "auth.rate_limited", nil)
+		return
+	}
+
 	var req loginRequest
 	if err := s.readJSON(r, &req); err != nil {
 		s.writeError(w, r, http.StatusBadRequest, "validation.failed", nil)
@@ -56,12 +64,35 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: false,
 		SameSite: http.SameSiteLaxMode,
 	})
+	if s.cfg.Web.CSRFEnabled {
+		csrf, err := generateCSRFToken()
+		if err != nil {
+			s.writeError(w, r, http.StatusInternalServerError, "internal.error", nil)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     "rana_csrf",
+			Value:    csrf,
+			Path:     "/",
+			HttpOnly: false,
+			SameSite: http.SameSiteLaxMode,
+		})
+		w.Header().Set("X-CSRF-Token", csrf)
+	}
 
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"code":    "ok",
 		"message": s.translate(r, "ok", nil),
 		"data":    tokens,
 	})
+}
+
+func generateCSRFToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {

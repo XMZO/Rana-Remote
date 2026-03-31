@@ -1,13 +1,15 @@
 # Build Go binaries
-FROM golang:1.22-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
 COPY go.mod .
 COPY go.sum .
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /rana ./cmd/rana
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /rana-api ./cmd/rana-api
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /rana ./cmd/rana
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /rana-api ./cmd/rana-api
 
 # Build Web assets
 FROM node:22-alpine AS web-builder
