@@ -26,15 +26,18 @@ import (
 )
 
 func main() {
-	cfgPath := flag.String("c", "config.yaml", "path to config file")
+	cfgPath := flag.String("c", "/data/config.yaml", "path to config file")
 	listen := flag.String("listen", "", "http listen address override")
 	basePath := flag.String("base-path", "", "base path override")
 	migrate := flag.Bool("migrate", false, "run migrations on startup")
 	flag.Parse()
 
-	cfg, err := config.Load(*cfgPath)
+	cfg, created, err := config.LoadOrInit(*cfgPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+	if created {
+		log.Printf("initialized default config at %s", *cfgPath)
 	}
 	if *listen != "" {
 		cfg.Web.Listen = *listen

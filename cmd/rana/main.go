@@ -14,14 +14,14 @@ import (
 )
 
 func main() {
-	cfgPath := flag.String("c", "config.yaml", "path to config file")
+	cfgPath := flag.String("c", "/data/config.yaml", "path to config file")
 	timeoutOverride := flag.String("timeout", "", "override timeout")
 	dryRun := flag.Bool("dry-run", false, "print generated script only")
 	serversFlag := flag.String("server", "", "comma-separated server names")
 	checkOnly := flag.Bool("check", false, "check ssh connectivity only")
 	flag.Parse()
 
-	cfg, err := config.Load(*cfgPath)
+	cfg, _, err := config.LoadOrInit(*cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		os.Exit(2)

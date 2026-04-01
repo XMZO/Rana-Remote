@@ -170,6 +170,117 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+func LoadOrInit(path string) (*Config, bool, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		cfg := DefaultConfig("")
+		return &cfg, false, nil
+	}
+
+	cfg, err := Load(trimmed)
+	if err == nil {
+		return cfg, false, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, false, err
+	}
+
+	defaultCfg := DefaultConfig(trimmed)
+	if err := Persist(trimmed, &defaultCfg); err != nil {
+		return nil, false, fmt.Errorf("initialize config: %w", err)
+	}
+	cfg, err = Load(trimmed)
+	if err != nil {
+		return nil, false, err
+	}
+	return cfg, true, nil
+}
+
+func DefaultConfig(path string) Config {
+	dsn := defaultDBDSN
+	trimmed := strings.TrimSpace(path)
+	if trimmed != "" {
+		dir := filepath.Dir(trimmed)
+		if dir != "" && dir != "." {
+			dsn = filepath.Join(dir, "rana.db")
+		}
+	}
+
+	adminUser := strings.TrimSpace(os.Getenv("RANA_ADMIN_USER"))
+	if adminUser == "" {
+		adminUser = "admin"
+	}
+	adminPass := strings.TrimSpace(os.Getenv("RANA_ADMIN_PASS"))
+	if adminPass == "" {
+		adminPass = "change_me"
+	}
+
+	cfg := Config{
+		Global: GlobalConfig{
+			Timeout:     defaultTimeout,
+			Concurrency: 3,
+			TempDir:     defaultTempDir,
+			SSH: SSHConfig{
+				StrictHostKey:  true,
+				KnownHostsPath: defaultKnownHostsPath,
+			},
+			Retention: RetentionConfig{
+				Executions:    defaultExecutionRetention,
+				ExecutionLogs: defaultExecutionLogRetain,
+				AuditLogs:     defaultAuditLogRetention,
+			},
+		},
+		Web: WebConfig{
+			Enabled:         true,
+			Listen:          defaultWebListen,
+			BasePath:        defaultWebBasePath,
+			SessionTTL:      defaultSessionTTL,
+			AccessTokenTTL:  defaultAccessTokenTTL,
+			RefreshTokenTTL: defaultRefreshTokenTTL,
+			CSRFEnabled:     true,
+		},
+		Database: DatabaseConfig{
+			Driver: defaultDBDriver,
+			DSN:    dsn,
+		},
+		Auth: AuthConfig{
+			BootstrapAdmin: BootstrapAdmin{
+				Username: adminUser,
+				Password: adminPass,
+			},
+			PasswordPolicy: PasswordPolicy{
+				MinLength:      12,
+				RequireNumber:  true,
+				RequireSpecial: true,
+			},
+			LoginRateLimit: defaultLoginRateLimit,
+		},
+		I18N: I18NConfig{
+			DefaultLocale:     defaultLocale,
+			SupportedLocales:  []string{defaultLocale, defaultFallbackLocale},
+			FallbackLocale:    defaultFallbackLocale,
+			LocaleSourceOrder: []string{"query", "cookie", "header"},
+		},
+		Notify: NotifyConfig{
+			OnFailure:         true,
+			SuppressionWindow: "10m",
+			Email: EmailNotifyConfig{
+				SMTPPort: 587,
+			},
+		},
+		Modules: ModuleConfig{
+			Backup:   true,
+			Schedule: true,
+			Audit:    true,
+			Notify:   true,
+			Users:    true,
+		},
+	}
+	cfg.applyDefaults()
+	cfg.expandPaths()
+	return cfg
+}
+
 func Persist(path string, cfg *Config) error {
 	if cfg == nil {
 		return errors.New("config is nil")

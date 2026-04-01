@@ -1,19 +1,16 @@
-services:
-  rana-api:
-    image: ${RANA_IMAGE:-ghcr.io/xmzo/rana-remote:latest}
-    pull_policy: always
-    container_name: rana-api
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    environment:
-      RANA_ADMIN_USER: admin
-      RANA_ADMIN_PASS: change_me
-      RANA_JWT_SECRET: change_me_please
-      RANA_DATA_KEY: change_me_data_key
-      SSH_KEY_PATH: /root/.ssh/id_rsa
-    volumes:
-      - ./config.example.yaml:/opt/rana/config.yaml:ro
-      - ./data:/data
-      - ${HOME}/.ssh:/root/.ssh:ro
-    command: ["-c", "/opt/rana/config.yaml", "-migrate"]
+services:
+  rana-api:
+    image: ${RANA_IMAGE:-ghcr.io/xmzo/rana-remote:latest}
+    pull_policy: always
+    container_name: rana-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      RANA_IMAGE: ${RANA_IMAGE:-ghcr.io/xmzo/rana-remote:latest}
+    volumes:
+      - ./data:/data
+      - ${HOME}/.ssh:/root/.ssh:ro
+    command: ["-migrate"]

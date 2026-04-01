@@ -123,3 +123,53 @@ func TestValidate_RetentionDuration(t *testing.T) {
 		t.Fatalf("expected retention validation error, got %v", err)
 	}
 }
+
+func TestDefaultConfig_UsesEnvBootstrapAdmin(t *testing.T) {
+	t.Setenv("RANA_ADMIN_USER", "root-admin")
+	t.Setenv("RANA_ADMIN_PASS", "super-secret")
+
+	cfg := DefaultConfig(filepath.Join("/tmp", "rana", "config.yaml"))
+	if cfg.Auth.BootstrapAdmin.Username != "root-admin" {
+		t.Fatalf("unexpected bootstrap username: %s", cfg.Auth.BootstrapAdmin.Username)
+	}
+	if cfg.Auth.BootstrapAdmin.Password != "super-secret" {
+		t.Fatalf("unexpected bootstrap password: %s", cfg.Auth.BootstrapAdmin.Password)
+	}
+	if cfg.Database.DSN != filepath.Join("/tmp", "rana", "rana.db") {
+		t.Fatalf("unexpected sqlite dsn: %s", cfg.Database.DSN)
+	}
+	if len(cfg.Servers) != 0 {
+		t.Fatalf("expected no seeded servers, got %d", len(cfg.Servers))
+	}
+}
+
+func TestLoadOrInit_CreatesMinimalConfigWhenMissing(t *testing.T) {
+	t.Setenv("RANA_ADMIN_USER", "admin")
+	t.Setenv("RANA_ADMIN_PASS", "secret")
+
+	path := filepath.Join(t.TempDir(), "config", "config.yaml")
+	cfg, created, err := LoadOrInit(path)
+	if err != nil {
+		t.Fatalf("LoadOrInit() error = %v", err)
+	}
+	if !created {
+		t.Fatal("expected config file to be created")
+	}
+	if cfg.Web.Listen != ":8080" {
+		t.Fatalf("unexpected web.listen: %s", cfg.Web.Listen)
+	}
+	if cfg.Database.DSN != filepath.Join(filepath.Dir(path), "rana.db") {
+		t.Fatalf("unexpected sqlite dsn: %s", cfg.Database.DSN)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read created config: %v", err)
+	}
+	text := string(persisted)
+	if !strings.Contains(text, "username: admin") {
+		t.Fatalf("created config missing bootstrap username: %s", text)
+	}
+	if !strings.Contains(filepath.ToSlash(text), "dsn: "+filepath.ToSlash(filepath.Join(filepath.Dir(path), "rana.db"))) {
+		t.Fatalf("created config missing sqlite dsn: %s", text)
+	}
+}

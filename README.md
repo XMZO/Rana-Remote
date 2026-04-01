@@ -29,21 +29,21 @@ On pushes, the workflow also publishes branch tags and commit SHA tags. On the d
 
 You do **not** need to build locally.
 
-1. Prepare config:
+1. Prepare `.env` and data directory:
 
 ```bash
-cp config.example.yaml config.yaml
+cp .env.example .env
 mkdir -p data
 ```
 
-2. Set required environment variables:
+2. Edit `.env` and set the deployment secrets:
 
-```bash
-export RANA_ADMIN_USER=admin
-export RANA_ADMIN_PASS='change_me'
-export RANA_JWT_SECRET='change_me_please'
-export RANA_DATA_KEY='change_me_data_key'
-export SSH_KEY_PATH="$HOME/.ssh/id_rsa"
+```dotenv
+RANA_IMAGE=ghcr.io/xmzo/rana-remote:latest
+RANA_ADMIN_USER=admin
+RANA_ADMIN_PASS=change_me_now
+RANA_JWT_SECRET=change_me_please_with_a_long_random_string
+RANA_DATA_KEY=change_me_with_a_long_random_string
 ```
 
 3. Start directly from GHCR:
@@ -52,13 +52,13 @@ export SSH_KEY_PATH="$HOME/.ssh/id_rsa"
 docker compose up -d
 ```
 
-4. Open the web UI:
+4. Open the web UI and finish the rest in Web Settings / Servers / Policies:
 
 ```text
 http://localhost:8080/
 ```
 
-The default `docker-compose.yml` pulls `ghcr.io/xmzo/rana-remote:latest`, so local compilation is not required.
+The default `docker-compose.yml` is now env-first: it pulls `ghcr.io/xmzo/rana-remote:latest`, stores runtime data in `./data`, and auto-initializes `/data/config.yaml` with built-in defaults on first boot. Users no longer need to copy `config.yaml` for the normal deployment path.
 
 ## Optional: local image build
 
@@ -76,28 +76,27 @@ RANA_IMAGE=ghcr.io/xmzo/rana-remote:latest docker compose up -d
 
 ## Quick start without Docker
 
-1. Copy and edit config:
+The non-Docker path also supports env-first startup now.
 
-```bash
-cp config.example.yaml config.yaml
-```
-
-2. Set required environment variables:
+1. Set required environment variables:
 
 ```bash
 export RANA_ADMIN_USER=admin
-export RANA_ADMIN_PASS='change_me'
-export RANA_JWT_SECRET='change_me'
-export SSH_KEY_PATH=~/.ssh/id_rsa
+export RANA_ADMIN_PASS='change_me_now'
+export RANA_JWT_SECRET='change_me_please_with_a_long_random_string'
+export RANA_DATA_KEY='change_me_with_a_long_random_string'
+mkdir -p data
 ```
 
-3. Run API:
+2. Run API:
 
 ```bash
-go run ./cmd/rana-api -c config.yaml -migrate
+go run ./cmd/rana-api -migrate
 ```
 
-4. Open the web UI at `http://localhost:8080/`
+3. Open the web UI at `http://localhost:8080/`
+
+By default the API now auto-creates `./data/config.yaml` with minimal internal defaults if the file does not exist. `config.example.yaml` remains for compatibility / advanced manual editing, not as the primary deployment entry.
 
 ## Release pipeline
 
@@ -171,9 +170,34 @@ The Dockerfile is Buildx-ready and uses `TARGETOS` / `TARGETARCH` so cross-platf
 - If `RANA_DATA_KEY` is set, server passphrases are stored encrypted at rest.
 - Execution trigger supports `policy_id` (policy-based paths/remote/flags/timeout/retry).
 - `notify.webhook_url` and `notify.email` support execution success/failure notifications with suppression window.
-- `PUT /api/v1/settings` persists changes back to the configured YAML file when the API was started with `-c`.
+- Runtime settings edited in Web are persisted to the internal config file (`/data/config.yaml` in Docker by default).
+- `config.example.yaml` is now a compatibility / advanced reference file, not the main user deployment entry.
 - Web UI is served from `web/dist` and includes auth, server/policy/user/settings, executions, schedules, audit, logs stream/download, and i18n switch.
 
+## Deployment model transition
+
+Primary deployment path is now:
+
+1. prepare `.env`
+2. `docker compose up -d`
+3. log into Web and configure servers / policies / runtime settings there
+
+What moved out of the main deployment path:
+
+- copying `config.example.yaml`
+- predeclaring `servers` in YAML
+- predeclaring `notify` settings in YAML
+- predeclaring most `web`, `modules`, and `i18n` runtime knobs in YAML
+- using `config.yaml` as the main operator-facing setup file
+
+Transitional behavior that still exists:
+
+- the app still has a YAML config system internally
+- on first boot it auto-generates a minimal config file so existing persistence logic keeps working
+- `PUT /api/v1/settings` still persists to that internal YAML file
+- advanced/manual operators may still provide `-c path/to/config.yaml`
+
+So the config system is still present for compatibility, but it is no longer the default deployment entrypoint.
 
 ## Implementation status
 

@@ -18,6 +18,9 @@ This file reflects current code reality against `implementation_plan.md`.
 - Server group: **Not Done**
 - Misfire / schedule semantics hardening: **Not Done in this pass**
 - Implementation status document: **Done**
+- Env-first deployment entry (`docker-compose.yml` + `.env`, auto-init internal config): **Done**
+  - Evidence: `docker-compose.yml`, `.env.example`, `cmd/rana-api/main.go`, `cmd/rana/main.go`, `internal/config/config.go`, `README.md`
+  - Notes: default deployment no longer mounts `config.example.yaml`; runtime still keeps an internal YAML file for compatibility and settings persistence.
 
 ## Explicitly Not Done
 - True WebSocket log streaming
