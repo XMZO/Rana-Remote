@@ -13,7 +13,7 @@ services:
       RANA_DATA_KEY: change_me_data_key
       SSH_KEY_PATH: /root/.ssh/id_rsa
     volumes:
-      - ./config.example.yaml:/opt/rana/config.yaml:ro
+      - ./config.yaml:/opt/rana/config.yaml:ro
       - ./data:/data
       - ${HOME}/.ssh:/root/.ssh:ro
     command: ["-c", "/opt/rana/config.yaml", "-migrate"]
