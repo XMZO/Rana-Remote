@@ -128,15 +128,16 @@ func (s *Server) Router() http.Handler {
 		mux.Handle("DELETE /api/v1/schedules/{id}", protected(http.HandlerFunc(s.handleFeatureDisabled)))
 	}
 
-	handler := localeMiddleware(mux)
-	handler = withTraceID(handler)
-	handler = withIPAllowList(s.cfg.Web.IPAllowList, handler)
-	handler = withCORS(s.cfg.Web.CORSAllowOrigins, handler)
-	handler = withCSRFGate(s.cfg.Web.CSRFEnabled, handler)
-	handler = withIdempotency(s, handler)
-	handler = withRequestTimeoutLog(30*time.Second, handler)
-	return handler
-}
+	handler := localeMiddleware(mux)
+	handler = withTraceID(handler)
+	handler = withRecovery(handler)
+	handler = withIPAllowList(s.cfg.Web.IPAllowList, handler)
+	handler = withCORS(s.cfg.Web.CORSAllowOrigins, handler)
+	handler = withCSRFGate(s.cfg.Web.CSRFEnabled, handler)
+	handler = withIdempotency(s, handler)
+	handler = withRequestTimeoutLog(30*time.Second, handler)
+	return handler
+}
 
 func authz(perm auth.Permission, next http.Handler) http.Handler {
 	return auth.RequirePermission(perm)(next)

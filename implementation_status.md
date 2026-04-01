@@ -8,14 +8,14 @@ This file reflects current code reality against `implementation_plan.md`.
 - **PUT /api/v1/settings persistence**: Now writes to SQLite DB instead of YAML
 - **System restart**: Successfully loads settings from DB on startup
 - **Web settings page**: Works with DB-backed settings
-- **DB models**: New `settings` table with all runtime settings
+- **DB models**: New `system_settings` table with all runtime settings
 - **Config system**: Downgraded to defaults-only role (no longer primary persistence)
 
 #### Files Changed:
-- `internal/store/models.go` - Added `Settings` struct
-- `internal/store/repository.go` - Added `GetSettings`/`UpsertSettings` to interface and MemoryRepository
-- `internal/store/sqlite_repository.go` - Added `settings` table migration and implementations
-- `internal/api/handler_settings.go` - Complete rewrite to use DB instead of YAML
+- `internal/store/models.go` - Added `SystemSettings` struct
+- `internal/store/repository.go` - Added `GetSettings`/`SaveSettings` to interface and MemoryRepository
+- `internal/store/sqlite_repository.go` - Added `system_settings` table migration and implementations
+- `internal/api/handler_settings.go` - Reworked to persist runtime settings in DB
 - `cmd/rana-api/main.go` - Added `loadSettingsFromDB()` on startup
 - `internal/api/settings_test.go` - Updated tests for DB persistence
 
@@ -55,12 +55,12 @@ This file reflects current code reality against `implementation_plan.md`.
 - The `config.yaml` file path is still tracked but no longer the primary persistence layer
 
 #### Architecture:
-```
+```text
 [PUT /api/v1/settings]
        ↓
 [Validate in handler_settings.go]
        ↓
-[UpsertSettings() → SQLite settings table]
+[SaveSettings() → SQLite system_settings table]
        ↓
 [Sync to in-memory config.Config]
        ↓

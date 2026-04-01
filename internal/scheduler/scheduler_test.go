@@ -70,3 +70,38 @@ func TestRunnerTick(t *testing.T) {
 		t.Fatalf("expected trigger call")
 	}
 }
+
+func TestRunnerStartIsStoppableWithoutBlockingCallerForever(t *testing.T) {
+	repo := store.NewMemoryRepository()
+	runner := NewRunner(repo, nil)
+	runner.pollEvery = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.Start(ctx)
+	}()
+
+	select {
+	case <-time.After(50 * time.Millisecond):
+		if err := runner.Stop(context.Background()); err != nil {
+			t.Fatalf("Stop error: %v", err)
+		}
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start returned unexpected error early: %v", err)
+		}
+		return
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start returned error after stop: %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("runner did not stop in time")
+	}
+}

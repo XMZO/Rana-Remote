@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -170,8 +172,41 @@ func withIdempotency(s *Server, next http.Handler) http.Handler {
 	})
 }
 
-func withRequestTimeoutLog(_ time.Duration, next http.Handler) http.Handler {
-	return next
+func withRequestTimeoutLog(timeout time.Duration, next http.Handler) http.Handler {
+	if timeout <= 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		timedOut := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				if ctx.Err() == context.DeadlineExceeded {
+					log.Printf("request timeout: method=%s path=%s remote=%s timeout=%s trace_id=%s", r.Method, r.URL.Path, r.RemoteAddr, timeout, traceIDFromContext(ctx))
+				}
+			case <-timedOut:
+			}
+		}()
+		defer close(timedOut)
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func withRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				traceID := traceIDFromRequest(r)
+				log.Printf("PANIC: method=%s path=%s remote=%s trace_id=%s err=%v\n%s", r.Method, r.URL.String(), r.RemoteAddr, traceID, rec, debug.Stack())
+				writeSimpleJSONError(w, http.StatusInternalServerError, "internal.error", "internal server error")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) getIdempotency(key string) (idempotencyRecord, bool) {
@@ -300,8 +335,8 @@ func remoteIP(r *http.Request) string {
 		return strings.TrimSpace(parts[0])
 	}
 	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err != nil {
-		return strings.TrimSpace(r.RemoteAddr)
+	if err == nil {
+		return host
 	}
-	return host
+	return strings.TrimSpace(r.RemoteAddr)
 }

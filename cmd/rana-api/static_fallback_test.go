@@ -10,6 +10,7 @@ import (
 )
 
 func TestWithStaticFallback_ServesAssetAndSPA(t *testing.T) {
+
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>index</html>"), 0o644); err != nil {
 		t.Fatalf("write index: %v", err)
@@ -93,16 +94,41 @@ func TestWithBasePath(t *testing.T) {
 	}
 }
 
-func TestWithBasePath_PrefixBoundary(t *testing.T) {
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-	h := withBasePath("/rana", http.StripPrefix("/rana", next))
-
-	boundaryReq := httptest.NewRequest(http.MethodGet, "/rana-api/healthz", nil)
-	boundaryRes := httptest.NewRecorder()
-	h.ServeHTTP(boundaryRes, boundaryReq)
-	if boundaryRes.Code != http.StatusNotFound {
-		t.Fatalf("expected prefix boundary mismatch to 404, got %d", boundaryRes.Code)
-	}
-}
+func TestWithBasePath_PrefixBoundary(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	h := withBasePath("/rana", http.StripPrefix("/rana", next))
+
+	boundaryReq := httptest.NewRequest(http.MethodGet, "/rana-api/healthz", nil)
+	boundaryRes := httptest.NewRecorder()
+	h.ServeHTTP(boundaryRes, boundaryReq)
+	if boundaryRes.Code != http.StatusNotFound {
+		t.Fatalf("expected prefix boundary mismatch to 404, got %d", boundaryRes.Code)
+	}
+}
+
+func TestWithStaticFallback_HealthzAndApiAreNotIntercepted(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>index</html>"), 0o644); err != nil {
+		t.Fatalf("write index: %v", err)
+	}
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(r.URL.Path))
+	})
+	h := withStaticFallback(next, dir)
+
+	for _, path := range []string{"/healthz", "/api/v1/healthz"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		res := httptest.NewRecorder()
+		h.ServeHTTP(res, req)
+		if res.Code != http.StatusAccepted {
+			t.Fatalf("path %s expected passthrough status, got %d body=%s", path, res.Code, res.Body.String())
+		}
+		if res.Body.String() != path {
+			t.Fatalf("path %s expected passthrough body, got %q", path, res.Body.String())
+		}
+	}
+}

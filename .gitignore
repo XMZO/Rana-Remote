@@ -1,5 +1,6 @@
-implementation_plan.md
-/rana
-/rana-api
-web/dist
-.env
+implementation_plan.md
+/rana
+/rana-api
+web/dist
+.env
+.tmp_*

@@ -113,3 +113,19 @@ func TestRouter_LoginRemainsAvailableWhenUsersModuleDisabled(t *testing.T) {
 		t.Fatalf("expected modules endpoint available, got %d body=%s", res.Code, res.Body.String())
 	}
 }
+
+func TestRouter_RecoveryReturns500InsteadOfReset(t *testing.T) {
+	h := withTraceID(withRecovery(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, req)
+	if res.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get(traceHeaderName); got == "" {
+		t.Fatal("expected trace header on panic response")
+	}
+}
