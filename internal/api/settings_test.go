@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -40,8 +37,8 @@ func newSettingsTestServer(t *testing.T) (*Server, http.Handler) {
 	_ = registry.Register(module.BasicModule{ModuleName: "audit", OnEnabled: true})
 	_ = registry.Register(module.BasicModule{ModuleName: "notify", OnEnabled: true})
 	_ = registry.Register(module.BasicModule{ModuleName: "users", OnEnabled: true})
-	s := NewServer(cfg, repo, tokens, tr, registry, nil)
-	return s, s.Router()
+	srv := NewServer(cfg, repo, tokens, tr, registry, nil)
+	return srv, srv.Router()
 }
 
 func loginAccessToken(t *testing.T, h http.Handler) string {
@@ -121,10 +118,6 @@ func TestSettings_UpdateEmailNotify(t *testing.T) {
 	    "suppression_window": "5m"
 	  }
 	}`)
-	var parsed updateSettingsRequest
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		t.Fatalf("decode request body: %v", err)
-	}
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+access)
@@ -138,7 +131,7 @@ func TestSettings_UpdateEmailNotify(t *testing.T) {
 	res := httptest.NewRecorder()
 	h.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
-		t.Fatalf("settings put status=%d body=%s parsed=%+v csrf=%v", res.Code, res.Body.String(), parsed, loginRes.Result().Cookies())
+		t.Fatalf("settings put status=%d body=%s", res.Code, res.Body.String())
 	}
 	if !s.cfg.Notify.Email.Enabled || s.cfg.Notify.Email.SMTPHost != "smtp.example.com" {
 		t.Fatalf("email notify settings not applied: %+v", s.cfg.Notify.Email)
@@ -146,15 +139,23 @@ func TestSettings_UpdateEmailNotify(t *testing.T) {
 	if len(s.cfg.Notify.Email.To) != 2 {
 		t.Fatalf("expected two recipients, got %+v", s.cfg.Notify.Email.To)
 	}
+	dbSettings, err := s.repo.GetSettings(t.Context())
+	if err != nil {
+		t.Fatalf("failed to get settings from DB: %v", err)
+	}
+	if !dbSettings.NotifyEmailEnabled || dbSettings.NotifyEmailSMTPHost != "smtp.example.com" {
+		t.Fatalf("settings not persisted to DB: %+v", dbSettings)
+	}
+	if len(dbSettings.NotifyEmailTo) != 2 {
+		t.Fatalf("expected two recipients in DB, got %+v", dbSettings.NotifyEmailTo)
+	}
+	if dbSettings.UpdatedAt.IsZero() {
+		t.Fatalf("expected UpdatedAt to be persisted")
+	}
 }
 
-func TestSettings_UpdatePersistsConfigFile(t *testing.T) {
+func TestSettings_UpdatePersistsToDB(t *testing.T) {
 	s, h := newSettingsTestServer(t)
-	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	s.SetConfigPath(cfgPath)
-	if err := config.Persist(cfgPath, s.cfg); err != nil {
-		t.Fatalf("persist seed config: %v", err)
-	}
 	access := loginAccessToken(t, h)
 	body := []byte(`{
 	  "notify": {
@@ -178,15 +179,141 @@ func TestSettings_UpdatePersistsConfigFile(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("settings put status=%d body=%s", res.Code, res.Body.String())
 	}
-	persisted, err := os.ReadFile(cfgPath)
+	dbSettings, err := s.repo.GetSettings(t.Context())
 	if err != nil {
-		t.Fatalf("read persisted config: %v", err)
+		t.Fatalf("failed to get settings from DB: %v", err)
 	}
-	text := string(persisted)
-	if !strings.Contains(text, "webhook_url: https://example.com/hook") {
-		t.Fatalf("persisted config missing webhook url: %s", text)
+	if dbSettings.NotifyWebhookURL != "https://example.com/hook" {
+		t.Fatalf("webhook URL not persisted to DB: %s", dbSettings.NotifyWebhookURL)
 	}
-	if !strings.Contains(text, "suppression_window: 10m") {
-		t.Fatalf("persisted config missing suppression window: %s", text)
+	if !dbSettings.NotifyOnSuccess {
+		t.Fatalf("on_success not persisted to DB")
+	}
+	if dbSettings.NotifySuppressionWindow != "10m" {
+		t.Fatalf("suppression_window not persisted to DB: %s", dbSettings.NotifySuppressionWindow)
+	}
+	if dbSettings.UpdatedAt.IsZero() {
+		t.Fatalf("expected UpdatedAt to be persisted")
+	}
+	if s.cfg.Notify.WebhookURL != "https://example.com/hook" {
+		t.Fatalf("webhook URL not synced to config: %s", s.cfg.Notify.WebhookURL)
+	}
+}
+
+func TestSettings_GetReturnsConfigSnapshotAfterDBSave(t *testing.T) {
+	s, h := newSettingsTestServer(t)
+	initialSettings := store.SystemSettings{
+		GlobalTimeout:           "2m",
+		GlobalConcurrency:       5,
+		GlobalSSHStrictHostKey:  false,
+		GlobalSSHKnownHostsPath: "/custom/path",
+		ModulesSchedule:         true,
+		ModulesAudit:            true,
+		ModulesNotify:           false,
+		ModulesUsers:            true,
+		I18NDefaultLocale:       "en-US",
+		NotifyOnSuccess:         true,
+		NotifyOnFailure:         false,
+		NotifySuppressionWindow: "15m",
+		NotifyEmailEnabled:      true,
+		NotifyEmailSMTPHost:     "custom.smtp.com",
+		NotifyEmailSMTPPort:     587,
+		NotifyEmailFrom:         "test@example.com",
+		NotifyEmailTo:           []string{"dest@example.com"},
+		NotifyWebhookURL:        "https://custom.hook.com",
+		UpdatedAt:               time.Now().UTC().Truncate(time.Millisecond),
+	}
+	if err := s.repo.SaveSettings(t.Context(), initialSettings); err != nil {
+		t.Fatalf("failed to save initial settings: %v", err)
+	}
+
+	// GET currently serves the in-memory config snapshot rather than reading from DB.
+	s.cfg.Global.Timeout = initialSettings.GlobalTimeout
+	s.cfg.Global.Concurrency = initialSettings.GlobalConcurrency
+	s.cfg.Global.SSH.StrictHostKey = initialSettings.GlobalSSHStrictHostKey
+	s.cfg.Global.SSH.KnownHostsPath = initialSettings.GlobalSSHKnownHostsPath
+	s.cfg.Modules.Schedule = initialSettings.ModulesSchedule
+	s.cfg.Modules.Audit = initialSettings.ModulesAudit
+	s.cfg.Modules.Notify = initialSettings.ModulesNotify
+	s.cfg.Modules.Users = initialSettings.ModulesUsers
+	s.cfg.I18N.DefaultLocale = initialSettings.I18NDefaultLocale
+	s.cfg.Notify.OnSuccess = initialSettings.NotifyOnSuccess
+	s.cfg.Notify.OnFailure = initialSettings.NotifyOnFailure
+	s.cfg.Notify.SuppressionWindow = initialSettings.NotifySuppressionWindow
+	s.cfg.Notify.Email.Enabled = initialSettings.NotifyEmailEnabled
+	s.cfg.Notify.Email.SMTPHost = initialSettings.NotifyEmailSMTPHost
+	s.cfg.Notify.Email.SMTPPort = initialSettings.NotifyEmailSMTPPort
+	s.cfg.Notify.Email.From = initialSettings.NotifyEmailFrom
+	s.cfg.Notify.Email.To = append([]string(nil), initialSettings.NotifyEmailTo...)
+	s.cfg.Notify.WebhookURL = initialSettings.NotifyWebhookURL
+
+	access := loginAccessToken(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	req.Header.Set("Authorization", "Bearer "+access)
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("settings get status=%d body=%s", res.Code, res.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode settings response: %v", err)
+	}
+	data := payload["data"].(map[string]any)
+	global := data["global"].(map[string]any)
+	if global["timeout"] != "2m" {
+		t.Fatalf("expected timeout 2m, got %v", global["timeout"])
+	}
+	if int(global["concurrency"].(float64)) != 5 {
+		t.Fatalf("expected concurrency 5, got %v", global["concurrency"])
+	}
+	ssh := global["ssh"].(map[string]any)
+	if ssh["strict_host_key"] != false {
+		t.Fatalf("expected strict_host_key false, got %v", ssh["strict_host_key"])
+	}
+	modules := data["modules"].(map[string]any)
+	if modules["notify"] != false {
+		t.Fatalf("expected modules.notify false, got %v", modules["notify"])
+	}
+	i18n := data["i18n"].(map[string]any)
+	if i18n["default_locale"] != "en-US" {
+		t.Fatalf("expected default_locale en-US, got %v", i18n["default_locale"])
+	}
+	notify := data["notify"].(map[string]any)
+	if notify["webhook_url"] != "https://custom.hook.com" {
+		t.Fatalf("expected webhook_url from config snapshot, got %v", notify["webhook_url"])
+	}
+}
+
+func TestSettings_ConfigFallbackOnEmptyDB(t *testing.T) {
+	s, h := newSettingsTestServer(t)
+	s.cfg.Global.Timeout = "3m"
+	s.cfg.Global.Concurrency = 10
+	s.cfg.Modules.Schedule = false
+	s.cfg.I18N.DefaultLocale = "zh-CN"
+
+	access := loginAccessToken(t, h)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	req.Header.Set("Authorization", "Bearer "+access)
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("settings get status=%d body=%s", res.Code, res.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode settings response: %v", err)
+	}
+	data := payload["data"].(map[string]any)
+	global := data["global"].(map[string]any)
+	if global["timeout"] != "3m" {
+		t.Fatalf("expected timeout 3m from config, got %v", global["timeout"])
+	}
+	if int(global["concurrency"].(float64)) != 10 {
+		t.Fatalf("expected concurrency 10 from config, got %v", global["concurrency"])
+	}
+	modules := data["modules"].(map[string]any)
+	if modules["schedule"] != false {
+		t.Fatalf("expected modules.schedule false from config, got %v", modules["schedule"])
 	}
 }

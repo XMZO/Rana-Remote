@@ -170,34 +170,49 @@ The Dockerfile is Buildx-ready and uses `TARGETOS` / `TARGETARCH` so cross-platf
 - If `RANA_DATA_KEY` is set, server passphrases are stored encrypted at rest.
 - Execution trigger supports `policy_id` (policy-based paths/remote/flags/timeout/retry).
 - `notify.webhook_url` and `notify.email` support execution success/failure notifications with suppression window.
-- Runtime settings edited in Web are persisted to the internal config file (`/data/config.yaml` in Docker by default).
-- `config.example.yaml` is now a compatibility / advanced reference file, not the main user deployment entry.
+
+- Runtime settings edited in Web are persisted to the SQLite database (`/data/rana.db` in Docker by default). Settings survive restarts without requiring config file persistence.
+
+- `config.yaml` is generated on first boot with internal defaults only; it is not the primary settings persistence layer.
+
+- `config.example.yaml` is a compatibility / advanced reference file, not the main user deployment entry.
+
 - Web UI is served from `web/dist` and includes auth, server/policy/user/settings, executions, schedules, audit, logs stream/download, and i18n switch.
 
-## Deployment model transition
-
-Primary deployment path is now:
-
-1. prepare `.env`
-2. `docker compose up -d`
-3. log into Web and configure servers / policies / runtime settings there
-
-What moved out of the main deployment path:
-
-- copying `config.example.yaml`
-- predeclaring `servers` in YAML
-- predeclaring `notify` settings in YAML
-- predeclaring most `web`, `modules`, and `i18n` runtime knobs in YAML
-- using `config.yaml` as the main operator-facing setup file
-
-Transitional behavior that still exists:
-
-- the app still has a YAML config system internally
-- on first boot it auto-generates a minimal config file so existing persistence logic keeps working
-- `PUT /api/v1/settings` still persists to that internal YAML file
-- advanced/manual operators may still provide `-c path/to/config.yaml`
-
-So the config system is still present for compatibility, but it is no longer the default deployment entrypoint.
+## Deployment model transition
+
+Primary deployment path is now:
+
+1. prepare `.env`
+2. `docker compose up -d`
+3. log into Web and configure servers / policies / runtime settings there
+
+What moved out of the main deployment path:
+
+- copying `config.example.yaml`
+- predeclaring `servers` in YAML
+- predeclaring `notify` settings in YAML
+- predeclaring most `web`, `modules`, and `i18n` runtime knobs in YAML
+- using `config.yaml` as the main operator-facing setup file
+
+### Settings Persistence
+
+Settings are now stored in the SQLite database (`/data/rana.db`), not in `config.yaml`. This means:
+
+- Settings persist across restarts automatically
+- No need to manually edit YAML files for runtime configuration
+- `PUT /api/v1/settings` writes to the database
+- System startup reads settings from DB to populate runtime config
+
+### Config File Role (Reduced)
+
+The `config.yaml` file is now only used for:
+
+- Initial default values (on first boot or when DB has no settings)
+- `database.*`, `auth.bootstrap_admin.*`, and `global.temp_dir` (still read from YAML)
+- Compatibility: advanced operators can still provide `-c path/to/config.yaml`
+
+Note: If both YAML config and DB settings exist, DB settings take precedence on startup.
 
 ## Implementation status
 

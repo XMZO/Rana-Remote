@@ -1,67 +1,133 @@
 package api
 
+
+
 import (
+
 	"net/http"
+
 	"strings"
 
+	"time"
+
+
+
 	"github.com/rana-remote/rana-remote/internal/auth"
+
 	"github.com/rana-remote/rana-remote/internal/config"
+
 	"github.com/rana-remote/rana-remote/internal/store"
+
 )
 
+
+
 type updateSettingsRequest struct {
+
 	Global  *updateGlobalSettings `json:"global,omitempty"`
+
 	Modules *updateModuleSettings `json:"modules,omitempty"`
+
 	Web     *updateWebSettings    `json:"web,omitempty"`
+
 	I18N    *updateI18NSettings   `json:"i18n,omitempty"`
+
 	Notify  *updateNotifySettings `json:"notify,omitempty"`
+
 }
+
+
 
 type updateGlobalSettings struct {
+
 	Timeout     *string          `json:"timeout,omitempty"`
+
 	Concurrency *int             `json:"concurrency,omitempty"`
+
 	SSH         *updateSSHConfig `json:"ssh,omitempty"`
+
 }
+
+
 
 type updateSSHConfig struct {
+
 	StrictHostKey  *bool   `json:"strict_host_key,omitempty"`
+
 	KnownHostsPath *string `json:"known_hosts_path,omitempty"`
+
 }
+
+
 
 type updateModuleSettings struct {
+
 	Schedule *bool `json:"schedule,omitempty"`
+
 	Audit    *bool `json:"audit,omitempty"`
+
 	Notify   *bool `json:"notify,omitempty"`
+
 	Users    *bool `json:"users,omitempty"`
+
 }
+
+
 
 type updateWebSettings struct {
+
 	CSRFEnabled      *bool    `json:"csrf_enabled,omitempty"`
+
 	CORSAllowOrigins []string `json:"cors_allow_origins,omitempty"`
+
 	IPAllowList      []string `json:"ip_allow_list,omitempty"`
+
 }
+
+
 
 type updateI18NSettings struct {
+
 	DefaultLocale *string `json:"default_locale,omitempty"`
+
 }
+
+
 
 type updateEmailNotifySettings struct {
+
 	Enabled  *bool    `json:"enabled,omitempty"`
+
 	SMTPHost *string  `json:"smtp_host,omitempty"`
+
 	SMTPPort *int     `json:"smtp_port,omitempty"`
+
 	Username *string  `json:"username,omitempty"`
+
 	Password *string  `json:"password,omitempty"`
+
 	From     *string  `json:"from,omitempty"`
+
 	To       []string `json:"to,omitempty"`
+
 	UseTLS   *bool    `json:"use_tls,omitempty"`
+
 }
 
+
+
 type updateNotifySettings struct {
+
 	WebhookURL        *string                    `json:"webhook_url,omitempty"`
+
 	Email             *updateEmailNotifySettings `json:"email,omitempty"`
+
 	OnSuccess         *bool                      `json:"on_success,omitempty"`
+
 	OnFailure         *bool                      `json:"on_failure,omitempty"`
+
 	SuppressionWindow *string                    `json:"suppression_window,omitempty"`
+
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -206,28 +272,56 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				next.Notify.SuppressionWindow = strings.TrimSpace(*req.Notify.SuppressionWindow)
 			}
 		}
-		next = config.WithDefaults(next)
-		if err := (&next).Validate(); err != nil {
-			s.writeError(w, r, http.StatusBadRequest, "validation.failed", map[string]any{"detail": err.Error()})
-			return
-		}
-		if strings.TrimSpace(s.cfgPath) != "" {
-			if err := config.Persist(s.cfgPath, &next); err != nil {
-				s.writeError(w, r, http.StatusInternalServerError, "internal.error", map[string]any{"detail": err.Error()})
-				return
-			}
-		}
-		*s.cfg = next
-		if actor, ok := auth.UserFromContext(r.Context()); ok && s.cfg.Modules.Audit {
-			_, _ = s.repo.CreateAuditLog(r.Context(), withAuditTrace(r, store.AuditLog{
-				ActorID:      actor.ID,
-				Action:       "settings.update",
-				ResourceType: "settings",
-				ResourceID:   "global",
-				IP:           remoteIP(r),
-				Diff:         "trace_id=" + traceIDFromContext(r.Context()),
-			}))
-		}
+		next = config.WithDefaults(next)
+		if err := (&next).Validate(); err != nil {
+			s.writeError(w, r, http.StatusBadRequest, "validation.failed", map[string]any{"detail": err.Error()})
+			return
+		}
+		*s.cfg = next
+
+		// Persist to database instead of config.yaml
+		dbSettings := store.SystemSettings{
+			GlobalTimeout:           next.Global.Timeout,
+			GlobalConcurrency:       next.Global.Concurrency,
+			GlobalSSHStrictHostKey: next.Global.SSH.StrictHostKey,
+			GlobalSSHKnownHostsPath: next.Global.SSH.KnownHostsPath,
+			WebCSRFEnabled:          next.Web.CSRFEnabled,
+			WebCORSAllowOrigins:     append([]string(nil), next.Web.CORSAllowOrigins...),
+			WebIPAllowList:          append([]string(nil), next.Web.IPAllowList...),
+			ModulesSchedule:        next.Modules.Schedule,
+			ModulesAudit:           next.Modules.Audit,
+			ModulesNotify:          next.Modules.Notify,
+			ModulesUsers:           next.Modules.Users,
+			I18NDefaultLocale:      next.I18N.DefaultLocale,
+			NotifyWebhookURL:        next.Notify.WebhookURL,
+			NotifyOnSuccess:        next.Notify.OnSuccess,
+			NotifyOnFailure:        next.Notify.OnFailure,
+			NotifySuppressionWindow: next.Notify.SuppressionWindow,
+			NotifyEmailEnabled:     next.Notify.Email.Enabled,
+			NotifyEmailSMTPHost:    next.Notify.Email.SMTPHost,
+			NotifyEmailSMTPPort:    next.Notify.Email.SMTPPort,
+			NotifyEmailUsername:    next.Notify.Email.Username,
+			NotifyEmailPassword:    next.Notify.Email.Password,
+			NotifyEmailFrom:        next.Notify.Email.From,
+			NotifyEmailTo:          append([]string(nil), next.Notify.Email.To...),
+			NotifyEmailUseTLS:      next.Notify.Email.UseTLS,
+			UpdatedAt:              time.Now().UTC(),
+		}
+		if err := s.repo.SaveSettings(r.Context(), dbSettings); err != nil {
+			s.writeError(w, r, http.StatusInternalServerError, "internal.error", map[string]any{"detail": err.Error()})
+			return
+		}
+
+		if actor, ok := auth.UserFromContext(r.Context()); ok && s.cfg.Modules.Audit {
+			_, _ = s.repo.CreateAuditLog(r.Context(), withAuditTrace(r, store.AuditLog{
+				ActorID:      actor.ID,
+				Action:       "settings.update",
+				ResourceType: "settings",
+				ResourceID:   "global",
+				IP:           remoteIP(r),
+				Diff:         "trace_id=" + traceIDFromContext(r.Context()),
+			}))
+		}
 		s.writeJSON(w, http.StatusOK, map[string]any{"code": "ok", "data": "updated"})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)

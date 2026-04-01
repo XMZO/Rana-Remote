@@ -16,58 +16,119 @@ var (
 )
 
 type Repository interface {
+
 	CreateUser(ctx context.Context, user User) (User, error)
+
 	ListUsers(ctx context.Context) ([]User, error)
+
 	GetUserByUsername(ctx context.Context, username string) (User, error)
+
 	GetUserByID(ctx context.Context, id string) (User, error)
+
 	UpdateUser(ctx context.Context, user User) error
+
 	UpdateUserPassword(ctx context.Context, id, passwordHash string) error
+
 	UpdateUserLogin(ctx context.Context, id string, at time.Time) error
+
 	UpdateUserLocale(ctx context.Context, id, locale string) error
+
 	DeleteUser(ctx context.Context, id string) error
 
+
+
 	ListServers(ctx context.Context) ([]Server, error)
+
 	GetServer(ctx context.Context, id string) (Server, error)
+
 	UpsertServer(ctx context.Context, server Server) (Server, error)
+
 	DeleteServer(ctx context.Context, id string) error
+
 	SeedServers(ctx context.Context, servers []Server) error
 
+
+
 	ListPolicies(ctx context.Context) ([]Policy, error)
+
 	GetPolicy(ctx context.Context, id string) (Policy, error)
+
 	CreatePolicy(ctx context.Context, policy Policy) (Policy, error)
+
 	UpdatePolicy(ctx context.Context, policy Policy) error
+
 	DeletePolicy(ctx context.Context, id string) error
 
+
+
 	ListSchedules(ctx context.Context) ([]Schedule, error)
+
 	GetSchedule(ctx context.Context, id string) (Schedule, error)
+
 	CreateSchedule(ctx context.Context, schedule Schedule) (Schedule, error)
+
 	UpdateSchedule(ctx context.Context, schedule Schedule) error
+
 	DeleteSchedule(ctx context.Context, id string) error
 
+
+
 	CreateExecution(ctx context.Context, ex Execution) (Execution, error)
+
 	UpdateExecution(ctx context.Context, ex Execution) error
+
 	GetExecution(ctx context.Context, id string) (Execution, error)
+
 	ListExecutions(ctx context.Context) ([]Execution, error)
 
+
+
 	AppendExecutionLog(ctx context.Context, log ExecutionLog) error
+
 	ListExecutionLogs(ctx context.Context, executionID string) ([]ExecutionLog, error)
 
+
+
 	CreateAuditLog(ctx context.Context, log AuditLog) (AuditLog, error)
+
 	ListAuditLogs(ctx context.Context) ([]AuditLog, error)
+
 	ApplyRetention(ctx context.Context, executionCutoff, logCutoff, auditCutoff time.Time) (RetentionReport, error)
+
+
+
+	// Settings management - persisted to DB, not config.yaml
+
+	GetSettings(ctx context.Context) (SystemSettings, error)
+
+	SaveSettings(ctx context.Context, settings SystemSettings) error
+
 }
 
 type MemoryRepository struct {
+
 	mu           sync.RWMutex
+
 	users        map[string]User
+
 	usersByName  map[string]string
+
 	servers      map[string]Server
+
 	serverByName map[string]string
+
 	policies     map[string]Policy
+
 	schedules    map[string]Schedule
+
 	executions   map[string]Execution
+
 	execLogs     map[string][]ExecutionLog
+
 	auditLogs    []AuditLog
+
+	settings     SystemSettings
+
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -552,6 +613,19 @@ func (m *MemoryRepository) ApplyRetention(_ context.Context, executionCutoff, lo
 		}
 		keptAudit = append(keptAudit, log)
 	}
-	m.auditLogs = append([]AuditLog(nil), keptAudit...)
-	return report, nil
+	m.auditLogs = append([]AuditLog(nil), keptAudit...)
+	return report, nil
+}
+
+func (m *MemoryRepository) GetSettings(_ context.Context) (SystemSettings, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.settings, nil
+}
+
+func (m *MemoryRepository) SaveSettings(_ context.Context, settings SystemSettings) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settings = settings
+	return nil
 }

@@ -160,6 +160,65 @@ func (s *SQLiteRepository) Migrate(ctx context.Context) error {
 			timestamp INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC)`,
+
+		`CREATE TABLE IF NOT EXISTS system_settings (
+
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+
+			global_timeout TEXT NOT NULL DEFAULT '30m',
+
+			global_concurrency INTEGER NOT NULL DEFAULT 3,
+
+			global_ssh_strict_host_key INTEGER NOT NULL DEFAULT 1,
+
+			global_ssh_known_hosts_path TEXT NOT NULL DEFAULT '',
+
+			web_csrf_enabled INTEGER NOT NULL DEFAULT 1,
+
+			web_cors_allow_origins_json TEXT NOT NULL DEFAULT '[]',
+
+			web_ip_allow_list_json TEXT NOT NULL DEFAULT '[]',
+
+			modules_schedule INTEGER NOT NULL DEFAULT 1,
+
+			modules_audit INTEGER NOT NULL DEFAULT 1,
+
+			modules_notify INTEGER NOT NULL DEFAULT 1,
+
+			modules_users INTEGER NOT NULL DEFAULT 1,
+
+			i18n_default_locale TEXT NOT NULL DEFAULT 'zh-CN',
+
+			notify_webhook_url TEXT NOT NULL DEFAULT '',
+
+			notify_on_success INTEGER NOT NULL DEFAULT 0,
+
+			notify_on_failure INTEGER NOT NULL DEFAULT 1,
+
+			notify_suppression_window TEXT NOT NULL DEFAULT '10m',
+
+			notify_email_enabled INTEGER NOT NULL DEFAULT 0,
+
+			notify_email_smtp_host TEXT NOT NULL DEFAULT '',
+
+			notify_email_smtp_port INTEGER NOT NULL DEFAULT 587,
+
+			notify_email_username TEXT NOT NULL DEFAULT '',
+
+			notify_email_password TEXT NOT NULL DEFAULT '',
+
+			notify_email_from TEXT NOT NULL DEFAULT '',
+
+			notify_email_to_json TEXT NOT NULL DEFAULT '[]',
+
+			notify_email_use_tls INTEGER NOT NULL DEFAULT 0,
+
+			updated_at INTEGER NOT NULL DEFAULT 0
+
+		)`,
+
+		`INSERT OR IGNORE INTO system_settings (id) VALUES (1)`,
+
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1360,8 +1419,191 @@ func (s *SQLiteRepository) ApplyRetention(ctx context.Context, executionCutoff, 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM execution_logs WHERE execution_id NOT IN (SELECT id FROM executions)`); err != nil {
 		return report, fmt.Errorf("delete orphan execution logs: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return report, fmt.Errorf("commit retention tx: %w", err)
-	}
-	return report, nil
+	if err := tx.Commit(); err != nil {
+		return report, fmt.Errorf("commit retention tx: %w", err)
+	}
+	return report, nil
+}
+
+func (s *SQLiteRepository) GetSettings(ctx context.Context) (SystemSettings, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT global_timeout, global_concurrency, global_ssh_strict_host_key, global_ssh_known_hosts_path,
+		        web_csrf_enabled, web_cors_allow_origins_json, web_ip_allow_list_json,
+		        modules_schedule, modules_audit, modules_notify, modules_users,
+		        i18n_default_locale,
+		        notify_webhook_url, notify_on_success, notify_on_failure, notify_suppression_window,
+		        notify_email_enabled, notify_email_smtp_host, notify_email_smtp_port,
+		        notify_email_username, notify_email_password, notify_email_from, notify_email_to_json, notify_email_use_tls,
+		        updated_at
+		 FROM system_settings WHERE id = 1`,
+	)
+	return scanSystemSettings(row)
+}
+
+func (s *SQLiteRepository) SaveSettings(ctx context.Context, settings SystemSettings) error {
+	corsJSON, err := marshalJSON(settings.WebCORSAllowOrigins)
+	if err != nil {
+		return fmt.Errorf("marshal cors origins: %w", err)
+	}
+	ipAllowJSON, err := marshalJSON(settings.WebIPAllowList)
+	if err != nil {
+		return fmt.Errorf("marshal ip allow list: %w", err)
+	}
+	emailToJSON, err := marshalJSON(settings.NotifyEmailTo)
+	if err != nil {
+		return fmt.Errorf("marshal email to: %w", err)
+	}
+
+	updatedAt := toMillis(settings.UpdatedAt)
+	if settings.UpdatedAt.IsZero() {
+		updatedAt = toMillis(time.Now().UTC())
+	}
+
+	_, err = s.db.ExecContext(
+		ctx,
+		`UPDATE system_settings SET
+			global_timeout = ?,
+			global_concurrency = ?,
+			global_ssh_strict_host_key = ?,
+			global_ssh_known_hosts_path = ?,
+			web_csrf_enabled = ?,
+			web_cors_allow_origins_json = ?,
+			web_ip_allow_list_json = ?,
+			modules_schedule = ?,
+			modules_audit = ?,
+			modules_notify = ?,
+			modules_users = ?,
+			i18n_default_locale = ?,
+			notify_webhook_url = ?,
+			notify_on_success = ?,
+			notify_on_failure = ?,
+			notify_suppression_window = ?,
+			notify_email_enabled = ?,
+			notify_email_smtp_host = ?,
+			notify_email_smtp_port = ?,
+			notify_email_username = ?,
+			notify_email_password = ?,
+			notify_email_from = ?,
+			notify_email_to_json = ?,
+			notify_email_use_tls = ?,
+			updated_at = ?
+		 WHERE id = 1`,
+		settings.GlobalTimeout,
+		settings.GlobalConcurrency,
+		boolToInt(settings.GlobalSSHStrictHostKey),
+		settings.GlobalSSHKnownHostsPath,
+		boolToInt(settings.WebCSRFEnabled),
+		corsJSON,
+		ipAllowJSON,
+		boolToInt(settings.ModulesSchedule),
+		boolToInt(settings.ModulesAudit),
+		boolToInt(settings.ModulesNotify),
+		boolToInt(settings.ModulesUsers),
+		settings.I18NDefaultLocale,
+		settings.NotifyWebhookURL,
+		boolToInt(settings.NotifyOnSuccess),
+		boolToInt(settings.NotifyOnFailure),
+		settings.NotifySuppressionWindow,
+		boolToInt(settings.NotifyEmailEnabled),
+		settings.NotifyEmailSMTPHost,
+		settings.NotifyEmailSMTPPort,
+		settings.NotifyEmailUsername,
+		settings.NotifyEmailPassword,
+		settings.NotifyEmailFrom,
+		emailToJSON,
+		boolToInt(settings.NotifyEmailUseTLS),
+		updatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("save settings: %w", err)
+	}
+	return nil
+}
+
+func scanSystemSettings(scanner interface{ Scan(dest ...any) error }) (SystemSettings, error) {
+	var settings SystemSettings
+	var globalTimeout, globalSSHKnownHostsPath, i18nDefaultLocale string
+	var globalConcurrency int
+	var globalSSHStrictHostKey, webCSRFEnabled int64
+	var webCORSAllowOriginsJSON, webIPAllowListJSON string
+	var modulesSchedule, modulesAudit, modulesNotify, modulesUsers int64
+	var notifyWebhookURL, notifySuppressionWindow string
+	var notifyOnSuccess, notifyOnFailure int64
+	var notifyEmailEnabled int64
+	var notifyEmailSMTPHost string
+	var notifyEmailSMTPPort int
+	var notifyEmailUsername, notifyEmailPassword, notifyEmailFrom string
+	var notifyEmailToJSON string
+	var notifyEmailUseTLS int64
+	var updatedAtMS int64
+
+	err := scanner.Scan(
+		&globalTimeout,
+		&globalConcurrency,
+		&globalSSHStrictHostKey,
+		&globalSSHKnownHostsPath,
+		&webCSRFEnabled,
+		&webCORSAllowOriginsJSON,
+		&webIPAllowListJSON,
+		&modulesSchedule,
+		&modulesAudit,
+		&modulesNotify,
+		&modulesUsers,
+		&i18nDefaultLocale,
+		&notifyWebhookURL,
+		&notifyOnSuccess,
+		&notifyOnFailure,
+		&notifySuppressionWindow,
+		&notifyEmailEnabled,
+		&notifyEmailSMTPHost,
+		&notifyEmailSMTPPort,
+		&notifyEmailUsername,
+		&notifyEmailPassword,
+		&notifyEmailFrom,
+		&notifyEmailToJSON,
+		&notifyEmailUseTLS,
+		&updatedAtMS,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SystemSettings{}, ErrNotFound
+		}
+		return SystemSettings{}, fmt.Errorf("scan system settings: %w", err)
+	}
+
+	settings.GlobalTimeout = globalTimeout
+	settings.GlobalConcurrency = globalConcurrency
+	settings.GlobalSSHStrictHostKey = globalSSHStrictHostKey != 0
+	settings.GlobalSSHKnownHostsPath = globalSSHKnownHostsPath
+	settings.WebCSRFEnabled = webCSRFEnabled != 0
+	settings.ModulesSchedule = modulesSchedule != 0
+	settings.ModulesAudit = modulesAudit != 0
+	settings.ModulesNotify = modulesNotify != 0
+	settings.ModulesUsers = modulesUsers != 0
+	settings.I18NDefaultLocale = i18nDefaultLocale
+	settings.NotifyWebhookURL = notifyWebhookURL
+	settings.NotifyOnSuccess = notifyOnSuccess != 0
+	settings.NotifyOnFailure = notifyOnFailure != 0
+	settings.NotifySuppressionWindow = notifySuppressionWindow
+	settings.NotifyEmailEnabled = notifyEmailEnabled != 0
+	settings.NotifyEmailSMTPHost = notifyEmailSMTPHost
+	settings.NotifyEmailSMTPPort = notifyEmailSMTPPort
+	settings.NotifyEmailUsername = notifyEmailUsername
+	settings.NotifyEmailPassword = notifyEmailPassword
+	settings.NotifyEmailFrom = notifyEmailFrom
+	settings.NotifyEmailUseTLS = notifyEmailUseTLS != 0
+	settings.UpdatedAt = fromMillis(updatedAtMS)
+
+	if err := unmarshalJSON(webCORSAllowOriginsJSON, &settings.WebCORSAllowOrigins); err != nil {
+		return SystemSettings{}, fmt.Errorf("decode web cors allow origins: %w", err)
+	}
+	if err := unmarshalJSON(webIPAllowListJSON, &settings.WebIPAllowList); err != nil {
+		return SystemSettings{}, fmt.Errorf("decode web ip allow list: %w", err)
+	}
+	if err := unmarshalJSON(notifyEmailToJSON, &settings.NotifyEmailTo); err != nil {
+		return SystemSettings{}, fmt.Errorf("decode notify email to: %w", err)
+	}
+
+	return settings, nil
 }

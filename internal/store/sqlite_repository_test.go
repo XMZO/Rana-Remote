@@ -210,3 +210,150 @@ func TestSQLiteRepository_ApplyRetention(t *testing.T) {
 		t.Fatalf("unexpected remaining audit logs: %+v", audits)
 	}
 }
+
+func TestSQLiteRepository_SettingsRoundTrip(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "rana-settings-test.db")
+	repo, err := NewSQLiteRepository(dsn)
+	if err != nil {
+		t.Fatalf("NewSQLiteRepository error: %v", err)
+	}
+	defer repo.Close()
+
+	ctx := context.Background()
+
+	settings, err := repo.GetSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetSettings error: %v", err)
+	}
+	if !settings.UpdatedAt.IsZero() {
+		t.Fatalf("expected zero UpdatedAt for initial settings, got %v", settings.UpdatedAt)
+	}
+
+	initialUpdatedAt := time.Now().UTC().Truncate(time.Millisecond)
+	initialSettings := SystemSettings{
+		GlobalTimeout:           "2m",
+		GlobalConcurrency:       5,
+		GlobalSSHStrictHostKey:  true,
+		GlobalSSHKnownHostsPath: "/custom/path",
+		WebCSRFEnabled:          false,
+		WebCORSAllowOrigins:     []string{"http://example.com"},
+		WebIPAllowList:          []string{"192.168.1.0/24"},
+		ModulesSchedule:         true,
+		ModulesAudit:            false,
+		ModulesNotify:           true,
+		ModulesUsers:            true,
+		I18NDefaultLocale:       "en-US",
+		NotifyWebhookURL:        "https://example.com/hook",
+		NotifyEmailEnabled:      true,
+		NotifyEmailSMTPHost:     "smtp.example.com",
+		NotifyEmailSMTPPort:     465,
+		NotifyEmailUsername:     "user",
+		NotifyEmailPassword:     "pass",
+		NotifyEmailFrom:         "from@example.com",
+		NotifyEmailTo:           []string{"to@example.com"},
+		NotifyEmailUseTLS:       true,
+		NotifyOnSuccess:         true,
+		NotifyOnFailure:         false,
+		NotifySuppressionWindow: "5m",
+		UpdatedAt:               initialUpdatedAt,
+	}
+	if err := repo.SaveSettings(ctx, initialSettings); err != nil {
+		t.Fatalf("SaveSettings error: %v", err)
+	}
+
+	got, err := repo.GetSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetSettings after save error: %v", err)
+	}
+	if got.GlobalTimeout != "2m" {
+		t.Fatalf("expected GlobalTimeout 2m, got %s", got.GlobalTimeout)
+	}
+	if got.GlobalConcurrency != 5 {
+		t.Fatalf("expected GlobalConcurrency 5, got %d", got.GlobalConcurrency)
+	}
+	if !got.GlobalSSHStrictHostKey {
+		t.Fatalf("expected GlobalSSHStrictHostKey true")
+	}
+	if got.WebCSRFEnabled {
+		t.Fatalf("expected WebCSRFEnabled false")
+	}
+	if len(got.WebCORSAllowOrigins) != 1 || got.WebCORSAllowOrigins[0] != "http://example.com" {
+		t.Fatalf("expected WebCORSAllowOrigins [http://example.com], got %v", got.WebCORSAllowOrigins)
+	}
+	if !got.ModulesSchedule {
+		t.Fatalf("expected ModulesSchedule true")
+	}
+	if got.ModulesAudit {
+		t.Fatalf("expected ModulesAudit false")
+	}
+	if got.I18NDefaultLocale != "en-US" {
+		t.Fatalf("expected I18NDefaultLocale en-US, got %s", got.I18NDefaultLocale)
+	}
+	if got.NotifyWebhookURL != "https://example.com/hook" {
+		t.Fatalf("expected NotifyWebhookURL, got %s", got.NotifyWebhookURL)
+	}
+	if !got.NotifyEmailEnabled {
+		t.Fatalf("expected NotifyEmailEnabled true")
+	}
+	if got.NotifyEmailSMTPPort != 465 {
+		t.Fatalf("expected NotifyEmailSMTPPort 465, got %d", got.NotifyEmailSMTPPort)
+	}
+	if len(got.NotifyEmailTo) != 1 || got.NotifyEmailTo[0] != "to@example.com" {
+		t.Fatalf("expected NotifyEmailTo [to@example.com], got %v", got.NotifyEmailTo)
+	}
+	if !got.NotifyOnSuccess {
+		t.Fatalf("expected NotifyOnSuccess true")
+	}
+	if got.NotifyOnFailure {
+		t.Fatalf("expected NotifyOnFailure false")
+	}
+	if got.NotifySuppressionWindow != "5m" {
+		t.Fatalf("expected NotifySuppressionWindow 5m, got %s", got.NotifySuppressionWindow)
+	}
+	if got.UpdatedAt.IsZero() {
+		t.Fatalf("expected UpdatedAt to be set")
+	}
+
+	updatedUpdatedAt := time.Now().UTC().Add(time.Second).Truncate(time.Millisecond)
+	updatedSettings := SystemSettings{
+		GlobalTimeout:   "10m",
+		ModulesSchedule: false,
+		NotifyOnFailure: true,
+		UpdatedAt:       updatedUpdatedAt,
+	}
+	if err := repo.SaveSettings(ctx, updatedSettings); err != nil {
+		t.Fatalf("SaveSettings(update) error: %v", err)
+	}
+
+	got2, err := repo.GetSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetSettings after update error: %v", err)
+	}
+	if got2.GlobalTimeout != "10m" {
+		t.Fatalf("expected GlobalTimeout 10m after update, got %s", got2.GlobalTimeout)
+	}
+	if got2.ModulesSchedule {
+		t.Fatalf("expected ModulesSchedule false after update")
+	}
+	if !got2.NotifyOnFailure {
+		t.Fatalf("expected NotifyOnFailure true after update")
+	}
+	if got2.GlobalConcurrency != 0 {
+		t.Fatalf("expected GlobalConcurrency reset to 0, got %d", got2.GlobalConcurrency)
+	}
+	if got2.GlobalSSHKnownHostsPath != "" {
+		t.Fatalf("expected GlobalSSHKnownHostsPath reset to empty, got %q", got2.GlobalSSHKnownHostsPath)
+	}
+	if got2.NotifyEmailEnabled {
+		t.Fatalf("expected NotifyEmailEnabled reset to false")
+	}
+	if len(got2.NotifyEmailTo) != 0 {
+		t.Fatalf("expected NotifyEmailTo reset to empty, got %v", got2.NotifyEmailTo)
+	}
+	if len(got2.WebCORSAllowOrigins) != 0 {
+		t.Fatalf("expected WebCORSAllowOrigins reset to empty, got %v", got2.WebCORSAllowOrigins)
+	}
+	if !got2.UpdatedAt.Equal(updatedUpdatedAt) {
+		t.Fatalf("expected UpdatedAt %v, got %v", updatedUpdatedAt, got2.UpdatedAt)
+	}
+}

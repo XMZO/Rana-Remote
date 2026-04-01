@@ -72,37 +72,81 @@ func main() {
 	}
 
 	if err := seedServers(context.Background(), repo, cfg.Servers); err != nil {
+
 		log.Fatalf("seed servers: %v", err)
+
 	}
+
 	if err := ensureAdmin(context.Background(), repo, cfg); err != nil {
+
 		log.Fatalf("ensure admin: %v", err)
+
 	}
+
+
+
+	// Load settings from DB and sync to in-memory config
+
+	// This ensures that on restart, settings persisted in DB override config defaults
+
+	if err := loadSettingsFromDB(context.Background(), repo, cfg); err != nil {
+
+		log.Printf("WARN: failed to load settings from DB: %v (using config defaults)", err)
+
+	}
+
+
 
 	accessTTL, _ := cfg.AccessTokenTTL()
+
 	refreshTTL, _ := cfg.RefreshTokenTTL()
+
 	jwtSecret := os.Getenv("RANA_JWT_SECRET")
+
 	if jwtSecret == "" {
+
 		jwtSecret = "rana-dev-secret-change-me"
+
 		log.Printf("WARN: RANA_JWT_SECRET not set; using development secret")
+
 	}
+
 	tokens, err := auth.NewTokenManager(jwtSecret, accessTTL, refreshTTL)
+
 	if err != nil {
+
 		log.Fatalf("init token manager: %v", err)
+
 	}
+
+
 
 	registry := module.NewRegistry()
+
 	_ = registry.Register(module.BasicModule{ModuleName: "backup", OnEnabled: cfg.Modules.Backup})
+
 	_ = registry.Register(module.BasicModule{ModuleName: "policy", OnEnabled: cfg.Modules.Backup})
+
 	_ = registry.Register(module.BasicModule{ModuleName: "schedule", OnEnabled: cfg.Modules.Schedule})
+
 	_ = registry.Register(module.BasicModule{ModuleName: "audit", OnEnabled: cfg.Modules.Audit})
+
 	_ = registry.Register(module.BasicModule{ModuleName: "notify", OnEnabled: cfg.Modules.Notify})
+
 	_ = registry.Register(module.BasicModule{ModuleName: "users", OnEnabled: cfg.Modules.Users})
+
 	_ = registry.Register(module.BasicModule{ModuleName: "i18n", OnEnabled: true})
 
+
+
 	apiServer := api.NewServer(cfg, repo, tokens, translator, registry, nil)
+
 	apiServer.SetConfigPath(*cfgPath)
+
 	if cfg.Modules.Notify {
+
 		apiServer.SetNotifier(notify.NewWebhookNotifier(&cfg.Notify))
+
 	}
 	schedRunner := scheduler.NewRunner(repo, func(ctx context.Context, schedule store.Schedule) error {
 		exec, err := apiServer.TriggerExecution(ctx, schedule.PolicyID, schedule.ServerNames, "schedule")
@@ -243,33 +287,72 @@ func withStaticFallback(next http.Handler, distDir string) http.Handler {
 	})
 }
 
-func normalizeBasePath(path string) string {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" || trimmed == "/" {
-		return "/"
-	}
-	trimmed = "/" + strings.Trim(trimmed, "/")
-	return trimmed
-}
-
-func newCopyURL(u *url.URL) *url.URL {
-	copy := *u
-	return &copy
-}
-
-func initRepository(cfg *config.Config) (store.Repository, func(), error) {
-	switch cfg.Database.Driver {
-	case "", "memory":
-		return store.NewMemoryRepository(), func() {}, nil
-	case "sqlite":
-		repo, err := store.NewSQLiteRepository(cfg.Database.DSN)
-		if err != nil {
-			return nil, nil, err
-		}
-		return repo, func() {
-			_ = repo.Close()
-		}, nil
-	default:
-		return nil, nil, fmt.Errorf("unsupported database driver: %s", cfg.Database.Driver)
-	}
+func normalizeBasePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" || trimmed == "/" {
+		return "/"
+	}
+	trimmed = "/" + strings.Trim(trimmed, "/")
+	return trimmed
+}
+
+func newCopyURL(u *url.URL) *url.URL {
+	copy := *u
+	return &copy
+}
+
+// loadSettingsFromDB loads runtime settings from the database and syncs them to the
+// in-memory config. This ensures that settings persisted via PUT /api/v1/settings
+// survive across restarts.
+func loadSettingsFromDB(ctx context.Context, repo store.Repository, cfg *config.Config) error {
+	settings, err := repo.GetSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("get settings: %w", err)
+	}
+	// Only sync if we have persisted settings (UpdatedAt is set)
+	if settings.UpdatedAt.IsZero() {
+		return nil
+	}
+	cfg.Global.Timeout = settings.GlobalTimeout
+	cfg.Global.Concurrency = settings.GlobalConcurrency
+	cfg.Global.SSH.StrictHostKey = settings.GlobalSSHStrictHostKey
+	cfg.Global.SSH.KnownHostsPath = settings.GlobalSSHKnownHostsPath
+	cfg.Web.CSRFEnabled = settings.WebCSRFEnabled
+	cfg.Web.CORSAllowOrigins = settings.WebCORSAllowOrigins
+	cfg.Web.IPAllowList = settings.WebIPAllowList
+	cfg.Modules.Schedule = settings.ModulesSchedule
+	cfg.Modules.Audit = settings.ModulesAudit
+	cfg.Modules.Notify = settings.ModulesNotify
+	cfg.Modules.Users = settings.ModulesUsers
+	cfg.I18N.DefaultLocale = settings.I18NDefaultLocale
+	cfg.Notify.WebhookURL = settings.NotifyWebhookURL
+	cfg.Notify.Email.Enabled = settings.NotifyEmailEnabled
+	cfg.Notify.Email.SMTPHost = settings.NotifyEmailSMTPHost
+	cfg.Notify.Email.SMTPPort = settings.NotifyEmailSMTPPort
+	cfg.Notify.Email.Username = settings.NotifyEmailUsername
+	cfg.Notify.Email.Password = settings.NotifyEmailPassword
+	cfg.Notify.Email.From = settings.NotifyEmailFrom
+	cfg.Notify.Email.To = settings.NotifyEmailTo
+	cfg.Notify.Email.UseTLS = settings.NotifyEmailUseTLS
+	cfg.Notify.OnSuccess = settings.NotifyOnSuccess
+	cfg.Notify.OnFailure = settings.NotifyOnFailure
+	cfg.Notify.SuppressionWindow = settings.NotifySuppressionWindow
+	return nil
+}
+
+func initRepository(cfg *config.Config) (store.Repository, func(), error) {
+	switch cfg.Database.Driver {
+	case "", "memory":
+		return store.NewMemoryRepository(), func() {}, nil
+	case "sqlite":
+		repo, err := store.NewSQLiteRepository(cfg.Database.DSN)
+		if err != nil {
+			return nil, nil, err
+		}
+		return repo, func() {
+			_ = repo.Close()
+		}, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported database driver: %s", cfg.Database.Driver)
+	}
 }

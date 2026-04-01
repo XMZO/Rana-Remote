@@ -109,14 +109,55 @@ type RetentionReport struct {
 	AuditLogs     int `json:"audit_logs"`
 }
 
-type AuditLog struct {
-	ID           string    `json:"id"`
-	ActorID      string    `json:"actor_id"`
-	Action       string    `json:"action"`
-	ResourceType string    `json:"resource_type"`
-	ResourceID   string    `json:"resource_id"`
-	Diff         string    `json:"diff,omitempty"`
-	IP           string    `json:"ip,omitempty"`
-	TraceID      string    `json:"trace_id,omitempty"`
-	Timestamp    time.Time `json:"timestamp"`
+type AuditLog struct {
+	ID           string    `json:"id"`
+	ActorID      string    `json:"actor_id"`
+	Action       string    `json:"action"`
+	ResourceType string    `json:"resource_type"`
+	ResourceID   string    `json:"resource_id"`
+	Diff         string    `json:"diff,omitempty"`
+	IP           string    `json:"ip,omitempty"`
+	TraceID      string    `json:"trace_id,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
+}
+
+// SystemSettings holds all runtime-configurable settings.
+// Stored in the database (system_settings table) instead of config.yaml.
+type SystemSettings struct {
+	// Global settings
+	GlobalTimeout            string   `json:"global_timeout"`
+	GlobalConcurrency        int      `json:"global_concurrency"`
+	GlobalSSHStrictHostKey   bool     `json:"global_ssh_strict_host_key"`
+	GlobalSSHKnownHostsPath  string   `json:"global_ssh_known_hosts_path"`
+
+	// Web settings
+	WebCSRFEnabled           bool     `json:"web_csrf_enabled"`
+	WebCORSAllowOrigins      []string `json:"web_cors_allow_origins"`
+	WebIPAllowList           []string `json:"web_ip_allow_list"`
+
+	// Module settings
+	ModulesSchedule          bool     `json:"modules_schedule"`
+	ModulesAudit             bool     `json:"modules_audit"`
+	ModulesNotify            bool     `json:"modules_notify"`
+	ModulesUsers             bool     `json:"modules_users"`
+
+	// I18N settings
+	I18NDefaultLocale        string   `json:"i18n_default_locale"`
+
+	// Notify settings
+	NotifyWebhookURL         string   `json:"notify_webhook_url"`
+	NotifyOnSuccess          bool     `json:"notify_on_success"`
+	NotifyOnFailure          bool     `json:"notify_on_failure"`
+	NotifySuppressionWindow  string   `json:"notify_suppression_window"`
+	NotifyEmailEnabled       bool     `json:"notify_email_enabled"`
+	NotifyEmailSMTPHost      string   `json:"notify_email_smtp_host"`
+	NotifyEmailSMTPPort      int      `json:"notify_email_smtp_port"`
+	NotifyEmailUsername      string   `json:"notify_email_username"`
+	NotifyEmailPassword      string   `json:"notify_email_password"`
+	NotifyEmailFrom          string   `json:"notify_email_from"`
+	NotifyEmailTo            []string `json:"notify_email_to"`
+	NotifyEmailUseTLS        bool     `json:"notify_email_use_tls"`
+
+	// Timestamp for tracking last update
+	UpdatedAt                time.Time `json:"updated_at"`
 }
