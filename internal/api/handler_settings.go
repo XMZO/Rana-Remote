@@ -226,7 +226,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				ResourceID:   "global",
 				IP:           remoteIP(r),
 				Diff:         "trace_id=" + traceIDFromContext(r.Context()),
-			})
+			}))
 		}
 		s.writeJSON(w, http.StatusOK, map[string]any{"code": "ok", "data": "updated"})
 	default:

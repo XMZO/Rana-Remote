@@ -98,7 +98,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 				ResourceID:   created.ID,
 				IP:           remoteIP(r),
 				Diff:         "trace_id=" + traceIDFromContext(r.Context()),
-			})
+			}))
 		}
 		s.writeJSON(w, http.StatusCreated, map[string]any{"code": "ok", "data": created})
 	default:
@@ -163,7 +163,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				ResourceID:   id,
 				IP:           remoteIP(r),
 				Diff:         "trace_id=" + traceIDFromContext(r.Context()),
-			})
+			}))
 		}
 		s.writeJSON(w, http.StatusOK, map[string]any{"code": "ok", "data": current})
 	case http.MethodDelete:
@@ -207,7 +207,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				ResourceID:   id,
 				IP:           remoteIP(r),
 				Diff:         "trace_id=" + traceIDFromContext(r.Context()),
-			})
+			}))
 		}
 		s.writeJSON(w, http.StatusOK, map[string]any{"code": "ok", "message": s.translate(r, "ok", nil)})
 	default:

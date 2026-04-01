@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rana-remote/rana-remote/internal/auth"
 	"github.com/rana-remote/rana-remote/internal/config"
@@ -17,28 +18,49 @@ import (
 	"github.com/rana-remote/rana-remote/internal/task"
 )
 
-type Server struct {
-	cfg      *config.Config
-	repo     store.Repository
-	tokens   *auth.TokenManager
-	tr       *i18n2.Translator
-	registry *module.Registry
-	executor task.Executor
+type taskNotifier interface {
+	NotifyExecution(ctx context.Context, ex store.Execution) error
+}
 
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
+type Server struct {
+	cfg          *config.Config
+	repo         store.Repository
+	tokens       *auth.TokenManager
+	tr           *i18n2.Translator
+	registry     *module.Registry
+	executor     task.Executor
+	notifier     taskNotifier
+	cfgPath      string
+	loginLimiter *loginRateLimiter
+
+	mu            sync.Mutex
+	cancels       map[string]context.CancelFunc
+	streams       map[string]map[chan store.ExecutionLog]struct{}
+	idempotency   map[string]idempotencyRecord
+	idempotencyMu sync.Mutex
 }
 
 func NewServer(cfg *config.Config, repo store.Repository, tokens *auth.TokenManager, tr *i18n2.Translator, registry *module.Registry, executor task.Executor) *Server {
 	return &Server{
-		cfg:      cfg,
-		repo:     repo,
-		tokens:   tokens,
-		tr:       tr,
-		registry: registry,
-		executor: executor,
-		cancels:  make(map[string]context.CancelFunc),
+		cfg:          cfg,
+		repo:         repo,
+		tokens:       tokens,
+		tr:           tr,
+		registry:     registry,
+		executor:     executor,
+		loginLimiter: newLoginRateLimiter(cfg.Auth.LoginRateLimit),
+		cancels:      make(map[string]context.CancelFunc),
+		streams:      make(map[string]map[chan store.ExecutionLog]struct{}),
+		idempotency:  make(map[string]idempotencyRecord),
 	}
+}
+
+func (s *Server) SetConfigPath(path string) {
+	s.cfgPath = strings.TrimSpace(path)
+}
+
+func (s *Server) SetNotifier(n taskNotifier) {
+	s.notifier = n
 }
 
 func (s *Server) Router() http.Handler {
@@ -59,20 +81,51 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("GET /api/v1/modules", protected(http.HandlerFunc(s.handleModules)))
 
 	mux.Handle("GET /api/v1/servers", protected(authz(auth.PermServerRead, http.HandlerFunc(s.handleListServers))))
+	mux.Handle("POST /api/v1/servers", protected(authz(auth.PermServerWrite, http.HandlerFunc(s.handleCreateServer))))
+	mux.Handle("GET /api/v1/servers/{id}", protected(authz(auth.PermServerRead, http.HandlerFunc(s.handleGetServer))))
+	mux.Handle("PUT /api/v1/servers/{id}", protected(authz(auth.PermServerWrite, http.HandlerFunc(s.handleUpdateServer))))
+	mux.Handle("DELETE /api/v1/servers/{id}", protected(authz(auth.PermServerWrite, http.HandlerFunc(s.handleDeleteServer))))
+	mux.Handle("POST /api/v1/servers/{id}/test-connection", protected(authz(auth.PermServerWrite, http.HandlerFunc(s.handleTestServerConnection))))
+
+	mux.Handle("GET /api/v1/policies", protected(authz(auth.PermPolicyRead, http.HandlerFunc(s.handlePolicies))))
+	mux.Handle("POST /api/v1/policies", protected(authz(auth.PermPolicyWrite, http.HandlerFunc(s.handlePolicies))))
+	mux.Handle("GET /api/v1/policies/{id}", protected(authz(auth.PermPolicyRead, http.HandlerFunc(s.handlePolicyByID))))
+	mux.Handle("PUT /api/v1/policies/{id}", protected(authz(auth.PermPolicyWrite, http.HandlerFunc(s.handlePolicyByID))))
+	mux.Handle("DELETE /api/v1/policies/{id}", protected(authz(auth.PermPolicyWrite, http.HandlerFunc(s.handlePolicyByID))))
+
+	mux.Handle("GET /api/v1/users", protected(authz(auth.PermUserWrite, http.HandlerFunc(s.handleUsers))))
+	mux.Handle("POST /api/v1/users", protected(authz(auth.PermUserWrite, http.HandlerFunc(s.handleUsers))))
+	mux.Handle("GET /api/v1/users/{id}", protected(authz(auth.PermUserWrite, http.HandlerFunc(s.handleUserByID))))
+	mux.Handle("PUT /api/v1/users/{id}", protected(authz(auth.PermUserWrite, http.HandlerFunc(s.handleUserByID))))
+	mux.Handle("DELETE /api/v1/users/{id}", protected(authz(auth.PermUserWrite, http.HandlerFunc(s.handleUserByID))))
+	mux.Handle("PUT /api/v1/users/{id}/password", protected(authz(auth.PermUserWrite, http.HandlerFunc(s.handleUserPasswordByID))))
+	mux.Handle("PUT /api/v1/me/password", protected(http.HandlerFunc(s.handleSetMyPassword)))
+
+	mux.Handle("GET /api/v1/settings", protected(http.HandlerFunc(s.handleSettings)))
+	mux.Handle("PUT /api/v1/settings", protected(authz(auth.PermSettingsWrite, http.HandlerFunc(s.handleSettings))))
 
 	mux.Handle("POST /api/v1/executions", protected(authz(auth.PermExecutionWrite, http.HandlerFunc(s.handleCreateExecution))))
 	mux.Handle("GET /api/v1/executions", protected(authz(auth.PermExecutionRead, http.HandlerFunc(s.handleListExecutions))))
 	mux.Handle("GET /api/v1/executions/{id}", protected(authz(auth.PermExecutionRead, http.HandlerFunc(s.handleGetExecution))))
+	mux.Handle("GET /api/v1/executions/{id}/logs", protected(authz(auth.PermExecutionRead, http.HandlerFunc(s.handleExecutionLogs))))
+	mux.Handle("GET /api/v1/executions/{id}/stream", protected(authz(auth.PermExecutionRead, http.HandlerFunc(s.handleExecutionStream))))
 	mux.Handle("POST /api/v1/executions/{id}/cancel", protected(authz(auth.PermExecutionWrite, http.HandlerFunc(s.handleCancelExecution))))
+	mux.Handle("POST /api/v1/executions/{id}/retry", protected(authz(auth.PermExecutionWrite, http.HandlerFunc(s.handleRetryExecution))))
 
 	mux.Handle("GET /api/v1/audit-logs", protected(authz(auth.PermAuditRead, http.HandlerFunc(s.handleAuditLogs))))
 
 	if s.cfg.Modules.Schedule {
 		mux.Handle("GET /api/v1/schedules", protected(authz(auth.PermExecutionRead, http.HandlerFunc(s.handleSchedules))))
 		mux.Handle("POST /api/v1/schedules", protected(authz(auth.PermExecutionWrite, http.HandlerFunc(s.handleSchedules))))
+		mux.Handle("GET /api/v1/schedules/{id}", protected(authz(auth.PermExecutionRead, http.HandlerFunc(s.handleScheduleByID))))
+		mux.Handle("PUT /api/v1/schedules/{id}", protected(authz(auth.PermExecutionWrite, http.HandlerFunc(s.handleScheduleByID))))
+		mux.Handle("DELETE /api/v1/schedules/{id}", protected(authz(auth.PermExecutionWrite, http.HandlerFunc(s.handleScheduleByID))))
 	} else {
 		mux.Handle("GET /api/v1/schedules", protected(http.HandlerFunc(s.handleFeatureDisabled)))
 		mux.Handle("POST /api/v1/schedules", protected(http.HandlerFunc(s.handleFeatureDisabled)))
+		mux.Handle("GET /api/v1/schedules/{id}", protected(http.HandlerFunc(s.handleFeatureDisabled)))
+		mux.Handle("PUT /api/v1/schedules/{id}", protected(http.HandlerFunc(s.handleFeatureDisabled)))
+		mux.Handle("DELETE /api/v1/schedules/{id}", protected(http.HandlerFunc(s.handleFeatureDisabled)))
 	}
 
 	handler := localeMiddleware(mux)

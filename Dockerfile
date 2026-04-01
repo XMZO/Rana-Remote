@@ -1,5 +1,5 @@
 # Build Go binaries
-FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24.3-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /src
 COPY go.mod .
